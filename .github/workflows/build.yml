@@ -1,7 +1,7 @@
 name: Alfa PRO connector build
 on:
   push:
-    branches: ["feat/**"]
+    branches: ["main", "feat/**"]
   pull_request:
   workflow_dispatch:
 
@@ -14,6 +14,17 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj --configuration Release
+
+  simulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run isolated WebSocket broker simulator and scenarios
+        run: dotnet run --project tests/AlfaPro.SimulatorTests/AlfaPro.SimulatorTests.csproj --configuration Release
 
   osengine-integration:
     runs-on: windows-latest
