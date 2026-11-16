@@ -32,6 +32,7 @@ var tests = new (string Name, Func<Task> Run)[]
 };
 
 int passed = 0, failed = 0;
+var outcomes = new List<ScenarioResult>();
 var duration = System.Diagnostics.Stopwatch.StartNew();
 foreach (var test in tests)
 {
@@ -40,15 +41,29 @@ foreach (var test in tests)
     {
         await test.Run().WaitAsync(TimeSpan.FromSeconds(20));
         Console.WriteLine($"PASS  {test.Name}  ({sw.ElapsedMilliseconds} ms)");
+        outcomes.Add(new ScenarioResult(test.Name, "passed", sw.ElapsedMilliseconds, null));
         passed++;
     }
     catch (Exception ex)
     {
         Console.WriteLine($"FAIL  {test.Name}: {ex}");
+        outcomes.Add(new ScenarioResult(test.Name, "failed", sw.ElapsedMilliseconds, ex.ToString()));
         failed++;
     }
 }
 Console.WriteLine($"TOTAL: {passed} passed, {failed} failed, {tests.Length} scenarios ({duration.Elapsed.TotalSeconds:F1}s)");
+Directory.CreateDirectory("test-results");
+File.WriteAllText(Path.Combine("test-results", "simulator-results.json"),
+    JsonSerializer.Serialize(new
+    {
+        utc = DateTimeOffset.UtcNow,
+        result = failed == 0 ? "passed" : "failed",
+        passed,
+        failed,
+        total = tests.Length,
+        durationMs = duration.ElapsedMilliseconds,
+        scenarios = outcomes
+    }, new JsonSerializerOptions { WriteIndented = true }));
 if (failed != 0) Environment.ExitCode = 1;
 
 static void Check(bool condition, string reason)
@@ -538,3 +553,5 @@ static JsonElement Json(string text)
     using var doc = JsonDocument.Parse(text);
     return doc.RootElement.Clone();
 }
+
+internal sealed record ScenarioResult(string Name, string Outcome, long DurationMs, string? Error);
