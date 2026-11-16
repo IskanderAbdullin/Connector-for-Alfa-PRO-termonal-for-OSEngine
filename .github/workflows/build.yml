@@ -30,4 +30,4 @@ jobs:
         run: python tools/install_into_osengine.py --osengine upstream/project/OsEngine
       - name: Build Windows OsEngine
         shell: pwsh
-        run: dotnet build upstream/project/OsEngine/OsEngine.csproj --configuration Debug --no-restore
+        run: dotnet build upstream/project/OsEngine/OsEngine.csproj --configuration Debug
