@@ -50,6 +50,9 @@ public sealed class AlfaProOrders
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _broker = new();
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _client = new();
     private readonly ConcurrentDictionary<string, byte> _dedupTrades = new();
+    private readonly ConcurrentDictionary<long, JsonElement> _earlyBrokerOrders = new();
+    private readonly ConcurrentDictionary<long, JsonElement> _earlyClientOrders = new();
+    private readonly ConcurrentDictionary<string, JsonElement> _earlyExecutions = new();
 
     public event Action<AlfaOrderRecord>? OrderChanged;
     public event Action<JsonElement>? OwnExecution;
@@ -113,6 +116,16 @@ public sealed class AlfaProOrders
             if (record.ClientOrderNumber > 0) _client[record.ClientOrderNumber] = record;
             if (record.BrokerId > 0) _broker[record.BrokerId] = record;
             record.State = AlfaSubmissionState.ServiceAccepted;
+            // A broker publication may precede the response to #Order.Enter.Query.
+            if (record.BrokerId > 0 && _earlyBrokerOrders.TryRemove(record.BrokerId, out var early))
+                OnBrokerOrder(early);
+            else if (record.ClientOrderNumber > 0 && _earlyClientOrders.TryRemove(record.ClientOrderNumber, out early))
+                OnBrokerOrder(early);
+            foreach (var pending in _earlyExecutions.ToArray())
+            {
+                if (pending.Value.Field("NumEDocument").Int64() != record.BrokerId) continue;
+                if (_earlyExecutions.TryRemove(pending.Key, out var execution)) OnOwnExecution(execution);
+            }
             OrderChanged?.Invoke(record);
             return record;
         }
@@ -172,7 +185,12 @@ public sealed class AlfaProOrders
         long brokerId = item.Field("NumEDocument").Int64();
         long clientId = item.Field("ClientOrderNum").Int64();
         var record = Find(brokerId, clientId);
-        if (record is null) return null; // external order or event before correlation
+        if (record is null)
+        {
+            if (brokerId > 0) _earlyBrokerOrders[brokerId] = item.Clone();
+            else if (clientId > 0) _earlyClientOrders[clientId] = item.Clone();
+            return null; // manual order or publication before submission acknowledgement
+        }
         var status = item.Field("IdOrderStatus").Int64();
         long rest = item.Field("Rest").Int64(-1);
         long version = item.Field("Version").Int64();
@@ -210,13 +228,14 @@ public sealed class AlfaProOrders
         long id = item.Field("IdOperation").Int64();
         long brokerId = item.Field("NumEDocument").Int64();
         string key = item.Field("IdAccount").Text() + ":" + id;
-        if (id <= 0 || !_dedupTrades.TryAdd(key, 0)) return false;
-        if (brokerId > 0 && _broker.TryGetValue(brokerId, out var order))
+        if (id <= 0 || _dedupTrades.ContainsKey(key)) return false;
+        if (brokerId <= 0 || !_broker.ContainsKey(brokerId))
         {
-            lock (order.Sync) order.RemainingUnits = Math.Max(0,
-                order.RemainingUnits - item.Field("Quantity").Int64());
-            OrderChanged?.Invoke(order);
+            _earlyExecutions[key] = item.Clone();
+            return false;
         }
+        if (!_dedupTrades.TryAdd(key, 0)) return false;
+        // OrderEntity.Rest remains authoritative: do not subtract the same fill twice.
         OwnExecution?.Invoke(item.Clone());
         return true;
     }
