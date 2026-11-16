@@ -52,7 +52,7 @@ public sealed class AlfaProSubscriptions
             if (lease.Expires - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(30)) continue;
             try
             {
-                var payload = new { Type = lease.Type, Id = lease.Id, Subscribe = true };
+                var payload = new { Id = lease.Id };
                 var response = AlfaProJson.Unwrap(await _transport.RequestAsync("#Data.Query", payload, _timeout, ct)
                     .ConfigureAwait(false));
                 AssertSubscribed(response, lease.Type);
