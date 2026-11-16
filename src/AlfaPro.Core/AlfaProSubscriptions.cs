@@ -22,7 +22,7 @@ public sealed class AlfaProSubscriptions
     public async Task<Lease> SubscribeAsync(
         string type, IReadOnlyCollection<long>? keys = null, CancellationToken ct = default)
     {
-        string identity = type + ":" + string.Join(",", keys?.OrderBy(x => x) ?? Array.Empty<long>());
+        string identity = type + ":" + (keys is null ? string.Empty : string.Join(",", keys.OrderBy(x => x)));
         if (_leases.TryGetValue(identity, out var existing)) return existing;
 
         var channel = "#Data.Bus." + type;
