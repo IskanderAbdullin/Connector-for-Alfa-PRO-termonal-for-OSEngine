@@ -484,7 +484,7 @@ static async Task CancelAfterPartial()
                 orders.OnBrokerOrder(item);
     };
     var order = await orders.SubmitAsync(Order());
-    orders.OnBrokerOrder(Json($"""{"NumEDocument":{{order.BrokerId}},"Rest":6,"IdOrderStatus":14,"Version":1}"""));
+    orders.OnBrokerOrder(Json(JsonSerializer.Serialize(new { NumEDocument = order.BrokerId, Rest = 6, IdOrderStatus = 14, Version = 1 })));
     Check(order.State == AlfaSubmissionState.PartiallyFilled, "partial execution not registered");
     await orders.CancelAsync(1);
     Check(order.CancelPending && order.State == AlfaSubmissionState.PartiallyFilled,
@@ -524,9 +524,9 @@ static async Task CrossAccountIsolation()
     int count = 0;
     orders.OwnExecution += _ => Interlocked.Increment(ref count);
     var order = await orders.SubmitAsync(Order());
-    var externalStatus = Json($"""{"NumEDocument":{{order.BrokerId}},"IdAccount":999,"IdOrderStatus":20,"Rest":0,"Version":10}""");
+    var externalStatus = Json(JsonSerializer.Serialize(new { NumEDocument = order.BrokerId, IdAccount = 999, IdOrderStatus = 20, Rest = 0, Version = 10 }));
     orders.OnBrokerOrder(externalStatus);
-    var externalFill = Json($"""{"NumEDocument":{{order.BrokerId}},"IdAccount":999,"IdOperation":6543,"Quantity":10}""");
+    var externalFill = Json(JsonSerializer.Serialize(new { NumEDocument = order.BrokerId, IdAccount = 999, IdOperation = 6543, Quantity = 10 }));
     orders.OnOwnExecution(externalFill);
     Check(order.State == AlfaSubmissionState.ServiceAccepted,
         "an event explicitly associated with a different account modified the order");
