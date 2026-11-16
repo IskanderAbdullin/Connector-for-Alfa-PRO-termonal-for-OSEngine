@@ -208,7 +208,7 @@ internal sealed class MockProTerminal : IAsyncDisposable
         } while (!part.EndOfMessage);
         using var document = JsonDocument.Parse(ms.ToArray());
         var root = document.RootElement;
-        var raw = root.GetProperty("Payload");
+        root.TryGetProperty("Payload", out var raw);
         JsonElement payload = default;
         if (raw.ValueKind == JsonValueKind.String)
         {
