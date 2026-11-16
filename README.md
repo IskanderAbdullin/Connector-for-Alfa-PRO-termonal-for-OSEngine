@@ -70,10 +70,15 @@ OsEngine's project uses SDK-default recursive source inclusion, so adding the C#
 ## Tests
 
 ```powershell
-dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj
+dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj -c Release
+dotnet run --project tests/AlfaPro.SimulatorTests/AlfaPro.SimulatorTests.csproj -c Release
 ```
 
-The GitHub Actions workflow additionally attempts an OsEngine integration build on Windows. No live orders are ever sent by these tests.
+The simulator tests use a real *local* WebSocket server; there are no real API tokens, broker connections or live orders. Scenarios include authorization, routing, parallel requests, subscriptions, order books, partial fills, duplicate executions, lost acknowledgements, cancellation/execution races and disconnects. Reports are written to `test-results/simulator-results.json` and uploaded by GitHub Actions.
+
+See [Simulator design, scenario matrix and limitations](docs/SIMULATOR.md).
+
+The GitHub Actions workflow also builds an OsEngine Windows integration. **Simulator tests do not verify behavior against the actual Alfa PRO Terminal.**
 
 ## Architecture
 
