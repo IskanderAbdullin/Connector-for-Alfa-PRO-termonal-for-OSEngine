@@ -191,6 +191,8 @@ public sealed class AlfaProOrders
         long brokerId = item.Field("NumEDocument").Int64();
         long clientId = item.Field("ClientOrderNum").Int64();
         var record = Find(brokerId, clientId);
+        // Broker IDs must not allow cross-account contamination.
+        if (record is not null && !MatchesAccount(item, record)) return null;
         if (record is null)
         {
             if (brokerId > 0) _earlyBrokerOrders[brokerId] = item.Clone();
@@ -235,15 +237,27 @@ public sealed class AlfaProOrders
         long brokerId = item.Field("NumEDocument").Int64();
         string key = item.Field("IdAccount").Text() + ":" + id;
         if (id <= 0 || _dedupTrades.ContainsKey(key)) return false;
-        if (brokerId <= 0 || !_broker.ContainsKey(brokerId))
+        if (brokerId <= 0 || !_broker.TryGetValue(brokerId, out var owner))
         {
             _earlyExecutions[key] = item.Clone();
             return false;
         }
+        if (!MatchesAccount(item, owner)) return false;
         if (!_dedupTrades.TryAdd(key, 0)) return false;
         // OrderEntity.Rest remains authoritative: do not subtract the same fill twice.
         OwnExecution?.Invoke(item.Clone());
         return true;
+    }
+
+    private static bool MatchesAccount(JsonElement item, AlfaOrderRecord record)
+    {
+        // Missing optional fields do not establish a mismatch.
+        long account = item.Field("IdAccount").Int64();
+        long section = item.Field("IdRazdel").Int64();
+        long sub = item.Field("IdSubAccount").Int64();
+        return (account <= 0 || account == record.Request.Account)
+            && (section <= 0 || section == record.Request.Section)
+            && (sub <= 0 || sub == record.Request.SubAccount);
     }
 
     public void MarkUnreconciled() => Reconciled = false;
