@@ -1,9 +1,98 @@
-# Alfa PRO connector for OsEngine
+# Alfa-Investments PRO WebSocket connector for OsEngine
 
-Development repository for a native Alfa-Investments PRO Terminal WebSocket API connector for OsEngine.
+A native OsEngine connector **under active development**, based on Alfa-Investments PRO WebSocket API 2.2.
 
-**Status:** under development. Do not enable live trading until protocol and order reconciliation have been validated against an actual PRO terminal.
+- Official protocol: https://alfadt.servicecdn.ru/alfadt/ad5/Alfa-Investments-Pro-API.pdf
+- OsEngine upstream: https://github.com/AlexWan/OsEngine
+- Upstream baseline inspected: `e33e66d947a4f584a19f49ebea2b351620a87463`
+- Platform: OsEngine / C# / .NET 10 / Windows
 
-API specification: https://alfadt.servicecdn.ru/alfadt/ad5/Alfa-Investments-Pro-API.pdf
+## IMPORTANT SAFETY STATUS
 
-Upstream OsEngine: https://github.com/AlexWan/OsEngine
+**NOT PRODUCTION READY. DO NOT ENABLE "Allow LIVE trading" until a real-terminal integration test and order-reconciliation audit have passed.** The implementation has not been tested with a live Alfa PRO terminal or live trading account. Trading is off by default.
+
+The repository contains code, not an independently installable trading application. It is intended to be injected into an OsEngine source checkout.
+
+## Implemented so far
+
+- WebSocket Bearer authentication and router requests with JSON-string `Payload`.
+- Concurrent request correlation, send serialization, explicit request timeouts and connection-loss handling.
+- Basic `#Data.Query` snapshots, bus subscriptions and renewal.
+- Initial terminal-state request plus authorization/signature monitoring.
+- Instrument identity mapping (`IdObject` vs `IdFi`), instrument parameters, order book and public trades.
+- Account section, balance and position event conversion into OsEngine models.
+- Basic allowed order parameter lookup and guarded limit/market order submission.
+- Order cancellations, broker-status mapping, partial fills, execution de-duplication and early event reconciliation.
+- Standard OsEngine `IServerRealization` and conservative `IServerPermission` integration.
+- Unit-check console project and Windows OsEngine integration build workflow.
+- Installer that makes minimal, reviewable edits to OsEngine `ServerMaster.cs`.
+
+## Not completed / not verified
+
+- Full durable order registry across program restarts; history from previous broker sessions.
+- Complete reconciliation of pre-existing, unmatched or manually placed broker orders.
+- Subscription recovery after every possible expiry/failure (current implementation fails closed).
+- Accurate `RCode` / account-section eligibility verification for all market types.
+- Broker margin and limit-service integration, margin-risk calculations.
+- Production-approved handling of bond price conventions and instrument-specific volume semantics.
+- Native order modification (the API documents cancel + new order).
+- Historical candle mapping, stop orders, additional order types, comprehensive tick history.
+- Complete position deletion handling and full broker/account portability.
+- Measured rate limits, latency guarantees, load testing, live terminal verification.
+- Protected-at-rest token persistence beyond standard OsEngine password parameter behavior.
+
+## Installation into an OsEngine checkout
+
+On Windows (with .NET 10 SDK installed), clone this connector repository and the official OsEngine repository.
+
+From this repository:
+
+```powershell
+python tools/install_into_osengine.py --osengine C:\\Source\\OsEngine\\project\\OsEngine --check
+python tools/install_into_osengine.py --osengine C:\\Source\\OsEngine\\project\\OsEngine
+dotnet build C:\\Source\\OsEngine\\project\\OsEngine\\OsEngine.csproj
+```
+
+The installer copies `src/OsEngine/*.cs` and `src/AlfaPro.Core/*.cs` into `Market/Servers/AlfaPro/` and adds the connector to `ServerMaster.cs` (factory, enum, permissions, server listings). It does **not** launch OsEngine or trade. It creates a one-time `ServerMaster.cs.alfapro-backup` when changing the master file. Review the resulting `git diff` before committing OsEngine changes.
+
+OsEngine's project uses SDK-default recursive source inclusion, so adding the C# files under `Market/Servers/AlfaPro/` should compile them together with the host. The repository's standalone `AlfaPro.Core.csproj` is for isolated tests; it is not copied into the host.
+
+## Configuration
+
+1. Open Alfa-Investments PRO Terminal.
+2. Enable the local API under **Integrations**.
+3. Generate a token in the terminal.
+4. Run OsEngine and select connector **AlfaPro**.
+5. Set `PRO WebSocket URL` to `ws://127.0.0.1:3366/router/`.
+6. Enter `PRO Bearer Token`.
+7. Keep **Allow LIVE trading = false** while validating read-only data and portfolio output.
+
+## Tests
+
+```powershell
+dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj
+```
+
+The GitHub Actions workflow additionally attempts an OsEngine integration build on Windows. No live orders are ever sent by these tests.
+
+## Architecture
+
+```text
+OsEngine Robots -> IServerRealization -> AlfaProSession
+                                       |-> AlfaProOrders
+                                       |-> AlfaProSubscriptions
+                                       |-> AlfaProTransport -> PRO Terminal WebSocket
+```
+
+### Key safety invariants
+
+- An unknown order submission outcome is never automatically resubmitted.
+- WebSocket connected does not mean broker authorized/signature ready.
+- `OrderEntity` confirms broker status; a successful submission response does not equal execution.
+- One own execution ID must not be processed twice.
+- Order book quantities are lots; order submission quantities are individual units.
+- No automatic 'change order price' implementation that could conceal cancellation/fill races.
+
+## License
+
+Connector source is independently authored for integration with OsEngine. Users must also comply with the license of the OsEngine host project. Neither project is affiliated with or endorsed by Alfa-Bank.
