@@ -1,0 +1,33 @@
+name: Alfa PRO connector build
+on:
+  push:
+    branches: ["feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj --configuration Release
+
+  osengine-integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Fetch official OsEngine
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/AlexWan/OsEngine.git upstream
+      - name: Inject connector into OsEngine
+        shell: pwsh
+        run: python tools/install_into_osengine.py --osengine upstream/project/OsEngine
+      - name: Build Windows OsEngine
+        shell: pwsh
+        run: dotnet build upstream/project/OsEngine/OsEngine.csproj --configuration Debug --no-restore
