@@ -113,6 +113,15 @@ public sealed class AlfaProSession : IAsyncDisposable
     {
         await _transport.ConnectAsync(endpoint, token, ct).ConfigureAwait(false);
         await _transport.ListenAsync("#ConnectionState.Bus", ct).ConfigureAwait(false);
+        // Official API §4: request an initial connection-state publication.
+        try
+        {
+            var state = await _transport.RequestAsync("#Data.Query",
+                new { Init = true, Subscribe = true }, _timeout, ct).ConfigureAwait(false);
+            var states = AlfaProJson.Unwrap(state).Field("States");
+            if (states.ValueKind == JsonValueKind.Object) UpdateAuthorization(states);
+        }
+        catch (Exception ex) { Error?.Invoke("Initial connection state unavailable: " + ex.Message); }
         // Account and order state streams must be installed before trading readiness is granted.
         foreach (var type in new[]
         {
@@ -162,9 +171,7 @@ public sealed class AlfaProSession : IAsyncDisposable
         if (channel == "#ConnectionState.Bus")
         {
             var states = AlfaProJson.Unwrap(payload).Field("States");
-            Orders.BrokerAuthorized = states.Field("User").Field("AuthStatus").Int64() == 2;
-            Orders.ReadyToSign = states.Field("SignService").Field("ReadyToSign").Bool();
-            AuthorizationChanged?.Invoke();
+            if (states.ValueKind == JsonValueKind.Object) UpdateAuthorization(states);
             return;
         }
 
@@ -174,6 +181,13 @@ public sealed class AlfaProSession : IAsyncDisposable
         var data = AlfaProJson.Unwrap(payload);
         foreach (var item in AlfaProJson.Items(data.Field("Updated"))) ProcessEntity(type, item, false);
         foreach (var item in AlfaProJson.Items(data.Field("Deleted"))) ProcessEntity(type, item, true);
+    }
+
+    private void UpdateAuthorization(JsonElement states)
+    {
+        Orders.BrokerAuthorized = states.Field("User").Field("AuthStatus").Int64() == 2;
+        Orders.ReadyToSign = states.Field("SignService").Field("ReadyToSign").Bool();
+        AuthorizationChanged?.Invoke();
     }
 
     private void ProcessEntity(string type, JsonElement item, bool deleted)
