@@ -23,7 +23,12 @@ var tests = new (string Name, Func<Task> Run)[]
     ("version regression cannot reopen a final order", OutOfOrderRevisions),
     ("socket loss suspends trading and fails outstanding request", ConnectionLoss),
     ("200 concurrent requests are all uniquely correlated", ConcurrentStress),
-    ("unknown and invalid market payloads fail conservatively", InvalidMarketData)
+    ("unknown and invalid market payloads fail conservatively", InvalidMarketData),
+    ("31st order book subscription is blocked before contacting the broker", MarketSubscriptionLimit),
+    ("500 streamed order books arrive intact and in order", MarketDataBurst),
+    ("confirmed cancellation after partial fill preserves executed quantity", CancelAfterPartial),
+    ("market orders omit the limit price and retain quantity in pieces", MarketOrderParameters),
+    ("events from another account cannot mutate an order", CrossAccountIsolation)
 };
 
 int passed = 0, failed = 0;
@@ -416,6 +421,116 @@ static Task InvalidMarketData()
           is null, "zero-volume public trade accepted");
     Check(AlfaProQuantities.LotsToUnits(3m, 10m) == 30, "lot conversion");
     return Task.CompletedTask;
+}
+
+static async Task MarketSubscriptionLimit()
+{
+    await using var mock = await MockProTerminal.StartAsync();
+    var instruments = Enumerable.Range(1, 31).Select(i => (object)new
+    {
+        IdObject = 1000 + i, IdObjectGroup = 5, Ticker = "SIM" + i,
+        Instruments = new[] { new { IdFi = 100 + i, IdMarketBoard = 4,
+            RCode = "TQBR", IsLiquid = true } }
+    }).ToArray();
+    mock.Snapshot("AssetInfoEntity", instruments);
+    await using var session = new AlfaProSession();
+    await session.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+    Check(session.Instruments.Count == 31, "test fixture instruments were not loaded");
+    foreach (var id in Enumerable.Range(101, 30))
+        await session.SubscribeMarketAsync(id);
+    await ExpectError(() => session.SubscribeMarketAsync(131), "31st order book was accepted");
+    Check(mock.Subscriptions("OrderBookEntity") == 30, "excess subscription reached the mock broker");
+}
+
+static async Task MarketDataBurst()
+{
+    await using var mock = await MockProTerminal.StartAsync();
+    mock.Snapshot("AssetInfoEntity", new
+    {
+        IdObject = 107, IdObjectGroup = 5, Ticker = "BURST",
+        Instruments = new[] { new { IdFi = 107, IdMarketBoard = 4,
+            RCode = "TQBR", IsLiquid = true } }
+    });
+    await using var session = new AlfaProSession();
+    int received = 0, lastQty = 0;
+    session.DepthUpdated += depth =>
+    {
+        Volatile.Write(ref lastQty, (int)depth.Levels[0].BidsInLots);
+        Interlocked.Increment(ref received);
+    };
+    await session.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+    await session.SubscribeMarketAsync(107);
+    for (int n = 1; n <= 500; n++)
+        await mock.BroadcastAsync("#Data.Bus.OrderBookEntity", new
+        {
+            Updated = new[] { new { IdFi = 107,
+                Lines = new[] { new { Price = 100.01, BuyQty = n, SellQty = 0 } } } }
+        });
+    await Eventually(() => Volatile.Read(ref received) == 500,
+        "stream lost one or more order-book updates", 7000);
+    Check(Volatile.Read(ref lastQty) == 500, "newest book snapshot was not delivered");
+}
+
+static async Task CancelAfterPartial()
+{
+    await using var mock = await MockProTerminal.StartAsync();
+    await using var transport = new AlfaProTransport();
+    await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+    var orders = Ready(transport);
+    transport.Broadcast += (channel, data) =>
+    {
+        if (channel == "#Data.Bus.OrderEntity")
+            foreach (var item in AlfaProJson.Items(data.Field("Updated")))
+                orders.OnBrokerOrder(item);
+    };
+    var order = await orders.SubmitAsync(Order());
+    orders.OnBrokerOrder(Json($"""{"NumEDocument":{{order.BrokerId}},"Rest":6,"IdOrderStatus":14,"Version":1}"""));
+    Check(order.State == AlfaSubmissionState.PartiallyFilled, "partial execution not registered");
+    await orders.CancelAsync(1);
+    Check(order.CancelPending && order.State == AlfaSubmissionState.PartiallyFilled,
+        "successful cancel request was confused with actual cancellation");
+    await mock.BroadcastAsync("#Data.Bus.OrderEntity", new
+    {
+        Updated = new[] { new { NumEDocument = order.BrokerId, Rest = 6, IdOrderStatus = 21, Version = 2 } }
+    });
+    await Eventually(() => order.State == AlfaSubmissionState.Cancelled,
+        "cancellation confirmation was not applied");
+    Check(order.RemainingUnits == 6 && !order.CancelPending,
+        "partial fill was lost or cancel state was not cleared");
+    await orders.CancelAsync(1);
+    Check(mock.Requests("#Order.Cancel.Query") == 1, "terminal order was cancelled twice");
+}
+
+static async Task MarketOrderParameters()
+{
+    await using var mock = await MockProTerminal.StartAsync();
+    await using var transport = new AlfaProTransport();
+    await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+    var orders = Ready(transport);
+    var marketOrder = Order() with { IsMarket = true, LimitPrice = 0 };
+    await orders.SubmitAsync(marketOrder);
+    var enter = mock.Frames.Single(x => x.Channel == "#Order.Enter.Query");
+    Check(enter.Payload.Field("Quantity").Int64() == 10, "market order quantity was changed");
+    Check(enter.Payload.Field("LimitPrice").ValueKind == JsonValueKind.Undefined,
+        "market order transmitted a spurious limit price");
+}
+
+static async Task CrossAccountIsolation()
+{
+    await using var mock = await MockProTerminal.StartAsync();
+    await using var transport = new AlfaProTransport();
+    await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+    var orders = Ready(transport);
+    int count = 0;
+    orders.OwnExecution += _ => Interlocked.Increment(ref count);
+    var order = await orders.SubmitAsync(Order());
+    var externalStatus = Json($"""{"NumEDocument":{{order.BrokerId}},"IdAccount":999,"IdOrderStatus":20,"Rest":0,"Version":10}""");
+    orders.OnBrokerOrder(externalStatus);
+    var externalFill = Json($"""{"NumEDocument":{{order.BrokerId}},"IdAccount":999,"IdOperation":6543,"Quantity":10}""");
+    orders.OnOwnExecution(externalFill);
+    Check(order.State == AlfaSubmissionState.ServiceAccepted,
+        "an event explicitly associated with a different account modified the order");
+    Check(count == 0, "a trade from another account was attributed to this order");
 }
 
 static JsonElement Json(string text)
