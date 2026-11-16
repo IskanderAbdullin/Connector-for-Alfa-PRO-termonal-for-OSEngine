@@ -139,7 +139,7 @@ public sealed class AlfaProSession : IAsyncDisposable
 
     private async Task SubscribeEntityAsync(string type, IReadOnlyCollection<long>? keys, CancellationToken ct)
     {
-        var key = type + ":" + string.Join(",", keys?.OrderBy(x => x) ?? Array.Empty<long>());
+        var key = type + ":" + (keys is null ? string.Empty : string.Join(",", keys.OrderBy(x => x)));
         _desiredEntityTypes.TryAdd(key, 0);
         await _subscriptions.SubscribeAsync(type, keys, ct).ConfigureAwait(false);
     }
