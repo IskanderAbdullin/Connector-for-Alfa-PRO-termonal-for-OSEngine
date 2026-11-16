@@ -151,7 +151,8 @@ static async Task SubscriptionLifecycle()
     Check(renew.Payload.Field("Type").ValueKind == JsonValueKind.Undefined,
         "renewal should identify existing subscription");
     await subscriptions.UnsubscribeAllAsync();
-    Check(mock.Frames.Any(f => f.Command == "unlisten" && f.Channel == "#Data.Bus.OrderBookEntity"),
+    await Eventually(() => mock.Frames.Any(f =>
+        f.Command == "unlisten" && f.Channel == "#Data.Bus.OrderBookEntity"),
         "channel not unlistened");
 }
 
@@ -369,7 +370,7 @@ static async Task ConnectionLoss()
     mock.OverrideReply = f => Task.FromResult<MockReply?>(f.Channel == "#Slow.Query" ? MockReply.Silent() : null);
     await using var session = new AlfaProSession();
     await session.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
-    Check(session.Orders.Reconciled, "session did not initialize reconciliation marker");
+    Check(!session.Orders.Reconciled, "unverified broker snapshots must never enable trading");
     // The low-level request is tested independently with the same disconnect behavior.
     await using var otherMock = await MockProTerminal.StartAsync();
     otherMock.OverrideReply = f => Task.FromResult<MockReply?>(f.Channel == "#Slow.Query"
