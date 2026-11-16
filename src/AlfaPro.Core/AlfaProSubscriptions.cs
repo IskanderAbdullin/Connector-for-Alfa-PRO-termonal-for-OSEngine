@@ -16,6 +16,7 @@ public sealed class AlfaProSubscriptions
     private readonly TimeSpan _timeout;
     private readonly ConcurrentDictionary<string, Lease> _leases = new();
     private readonly ConcurrentDictionary<string, byte> _listened = new();
+    private readonly SemaphoreSlim _subscribeGate = new(1, 1);
 
     public AlfaProSubscriptions(AlfaProTransport transport, TimeSpan timeout)
     {
@@ -29,25 +30,39 @@ public sealed class AlfaProSubscriptions
         string type, IReadOnlyCollection<long>? keys = null, CancellationToken ct = default)
     {
         string identity = type + ":" + (keys is null ? string.Empty : string.Join(",", keys.OrderBy(x => x)));
-        if (_leases.TryGetValue(identity, out var existing)) return existing;
+        JsonElement snapshot = default;
+        Lease lease;
 
-        var channel = "#Data.Bus." + type;
-        if (_listened.TryAdd(channel, 0))
+        // A single gate is intentionally used for the full subscribe handshake:
+        // simultaneous OsEngine robots must not allocate duplicate leases.
+        await _subscribeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            try { await _transport.ListenAsync(channel, ct).ConfigureAwait(false); }
-            catch { _listened.TryRemove(channel, out _); throw; }
+            if (_leases.TryGetValue(identity, out var existing)) return existing;
+
+            var channel = "#Data.Bus." + type;
+            if (_listened.TryAdd(channel, 0))
+            {
+                try { await _transport.ListenAsync(channel, ct).ConfigureAwait(false); }
+                catch { _listened.TryRemove(channel, out _); throw; }
+            }
+            var payload = new Dictionary<string, object?> { ["Type"] = type, ["Init"] = true };
+            if (keys is { Count: > 0 }) payload["Keys"] = keys;
+            var response = AlfaProJson.Unwrap(await _transport.RequestAsync(
+                "#Data.Query", payload, _timeout, ct).ConfigureAwait(false));
+            AssertSubscribed(response, type);
+            lease = new Lease(identity, type, keys?.ToArray() ?? [],
+                response.Field("Id").Int64(),
+                response.Field("Expires").Date() ?? DateTimeOffset.UtcNow.AddMinutes(1));
+            if (lease.Id <= 0) throw new InvalidDataException("Subscription ID missing: " + type);
+            _leases[identity] = lease;
+            var data = response.Field("Data");
+            if (data.ValueKind == JsonValueKind.Array) snapshot = data.Clone();
         }
-        var payload = new Dictionary<string, object?> { ["Type"] = type, ["Init"] = true };
-        if (keys is { Count: > 0 }) payload["Keys"] = keys;
-        var response = AlfaProJson.Unwrap(await _transport.RequestAsync("#Data.Query", payload, _timeout, ct)
-            .ConfigureAwait(false));
-        AssertSubscribed(response, type);
-        var lease = new Lease(identity, type, keys?.ToArray() ?? [], response.Field("Id").Int64(),
-            response.Field("Expires").Date() ?? DateTimeOffset.UtcNow.AddMinutes(1));
-        if (lease.Id <= 0) throw new InvalidDataException("Subscription ID missing: " + type);
-        _leases[identity] = lease;
-        var data = response.Field("Data");
-        if (data.ValueKind == JsonValueKind.Array) Snapshot?.Invoke(type, data);
+        finally { _subscribeGate.Release(); }
+
+        // Do not invoke external event handlers under a subscription lock.
+        if (snapshot.ValueKind == JsonValueKind.Array) Snapshot?.Invoke(type, snapshot);
         return lease;
     }
 
