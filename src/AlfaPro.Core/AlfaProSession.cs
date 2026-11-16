@@ -139,7 +139,10 @@ public sealed class AlfaProSession : IAsyncDisposable
         {
             await SubscribeEntityAsync(type, null, ct).ConfigureAwait(false);
         }
-        Orders.MarkReconciled(); // Initial snapshots obtained; broker authorization is checked separately.
+        // A subscription snapshot alone does not prove that all prior orders and
+        // positions were reconciled. Keep live trading blocked until a dedicated,
+        // authoritative reconciliation procedure has completed successfully.
+        Orders.MarkUnreconciled();
         _renewLoop = Task.Run(() => RenewalLoopAsync(_stop.Token));
     }
 
