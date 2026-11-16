@@ -35,9 +35,10 @@ def prepare_server_master(original: str) -> str:
     result = require_replace(result,
         "serverTypes.Add(ServerType.FinamGrpc);",
         "serverTypes.Add(ServerType.FinamGrpc);\n                serverTypes.Add(ServerType.AlfaPro);", 2)
+    # Append to the enum instead of inserting in the middle: keep existing numeric ServerType IDs stable.
     result = require_replace(result,
-        "FinamGrpc,\n",
-        "FinamGrpc,\n\n        /// <summary>Alfa-Investments PRO Terminal WebSocket</summary>\n        AlfaPro,\n", 1)
+        "        BCS\\n    }\\n}",
+        "        BCS,\\n\\n        /// <summary>Alfa-Investments PRO Terminal WebSocket</summary>\\n        AlfaPro\\n    }\\n}", 1)
 
     creation = re.compile(
         r"(else if \(type == ServerType\.FinamGrpc\)\s*\{\s*"
