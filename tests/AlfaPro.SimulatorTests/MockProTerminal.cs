@@ -1,3 +1,4 @@
+using AlfaPro.Core;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
