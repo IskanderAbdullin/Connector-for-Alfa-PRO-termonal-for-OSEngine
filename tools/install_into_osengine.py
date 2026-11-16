@@ -20,7 +20,7 @@ ENGINE_FILES = ROOT / "src" / "OsEngine"
 CORE_FILES = ROOT / "src" / "AlfaPro.Core"
 
 def require_replace(text: str, before: str, after: str, expected_count: int) -> str:
-    if after in text and before not in text:
+    if after in text:
         return text
     count = text.count(before)
     if count != expected_count:
