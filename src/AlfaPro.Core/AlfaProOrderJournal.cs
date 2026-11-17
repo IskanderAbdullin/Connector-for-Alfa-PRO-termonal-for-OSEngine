@@ -17,8 +17,30 @@ public enum AlfaProJournalKind
     BrokerState = 4,
     OwnExecution = 5,
     CancelIntent = 6,
-    CancelAcknowledged = 7
+    CancelAcknowledged = 7,
+    OperatorObservation = 8
 }
+
+public enum AlfaProEvidenceSource
+{
+    TerminalOrderHistory = 1,
+    BrokerStatement = 2,
+    BrokerSupport = 3
+}
+
+public enum AlfaProObservedOutcome
+{
+    Working = 1,
+    Filled = 2,
+    Cancelled = 3,
+    Rejected = 4,
+    StillUncertain = 5
+}
+
+/// <summary>Unverified operator assertion with an external reference; NEVER broker-authoritative.</summary>
+public sealed record AlfaProOperatorObservation(
+    AlfaProEvidenceSource Source, AlfaProObservedOutcome Outcome,
+    string Reference, string Note);
 
 /// <summary>
 /// Immutable trading-event payload. No access token or terminal credentials are stored.
@@ -35,7 +57,8 @@ public sealed record AlfaProJournalEntry(
     long Revision = 0,
     long ExecutionId = 0,
     long Account = 0,
-    DateTimeOffset RecordedAtUtc = default);
+    DateTimeOffset RecordedAtUtc = default,
+    AlfaProOperatorObservation? Observation = null);
 
 internal sealed record AlfaProJournalLine(long Sequence, string Payload, string Sha256);
 
