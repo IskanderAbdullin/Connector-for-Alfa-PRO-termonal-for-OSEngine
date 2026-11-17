@@ -34,7 +34,8 @@ public sealed record AlfaProJournalEntry(
     long RemainingUnits = -1,
     long Revision = 0,
     long ExecutionId = 0,
-    long Account = 0);
+    long Account = 0,
+    DateTimeOffset RecordedAtUtc = default);
 
 internal sealed record AlfaProJournalLine(long Sequence, string Payload, string Sha256);
 
@@ -142,7 +143,10 @@ public sealed class AlfaProOrderJournal : IDisposable
             if (_disposed || !_healthy)
                 throw new IOException("Journal is closed or faulted; live trading is prohibited");
             long sequence = checked(_sequence + 1);
-            string payload = JsonSerializer.Serialize(entry);
+            var stamped = entry.RecordedAtUtc == default
+                ? entry with { RecordedAtUtc = DateTimeOffset.UtcNow }
+                : entry;
+            string payload = JsonSerializer.Serialize(stamped);
             string text = JsonSerializer.Serialize(
                 new AlfaProJournalLine(sequence, payload, Hash(sequence, payload))) + "\n";
             byte[] encoded = Utf8.GetBytes(text);
@@ -156,7 +160,7 @@ public sealed class AlfaProOrderJournal : IDisposable
                 // Flush(true) asks the OS to flush file data to stable storage.
                 _stream.Flush(true);
                 _sequence = sequence;
-                _events.Add(entry);
+                _events.Add(stamped);
             }
             catch
             {
