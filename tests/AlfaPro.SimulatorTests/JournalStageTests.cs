@@ -118,7 +118,9 @@ internal static class JournalStageTests
             Check(mock.Requests("#Order.Enter.Query") == 1, "request was never sent");
             Check(journal.Entries.Count == 1 &&
                 journal.Entries[0].Kind == AlfaProJournalKind.SubmitIntent &&
-                journal.LastSequence == 1, "submit intent not durably written before send");
+                journal.LastSequence == 1 &&
+                journal.Entries[0].RecordedAtUtc > DateTimeOffset.UtcNow.AddMinutes(-2),
+                "submit intent, timestamp or sequence not durably written before send");
             Check(orders.AllOrders.Single().State == AlfaSubmissionState.OutcomeUnknown,
                 "timed-out order marked as rejected");
         }
