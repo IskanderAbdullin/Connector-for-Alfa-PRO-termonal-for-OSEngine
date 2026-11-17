@@ -14,6 +14,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: dotnet run --project tests/AlfaPro.Core.Tests/AlfaPro.Core.Tests.csproj --configuration Release
+      - name: Build standalone read-only diagnostic CLI
+        run: dotnet build tools/AlfaPro.Diagnostic/AlfaPro.Diagnostic.csproj --configuration Release
+      - name: Validate diagnostic help without credentials
+        run: dotnet run --no-build --project tools/AlfaPro.Diagnostic/AlfaPro.Diagnostic.csproj --configuration Release -- help
 
   simulator:
     runs-on: ubuntu-latest
