@@ -25,7 +25,8 @@ internal static class RecoveryStageTests
         ("expired lease automatically reacquires new ID and snapshot", LeaseRecreation),
         ("untracked execution blocks reconciliation", UntrackedExecution),
         ("unknown broker order status blocks reconciliation", UnknownStatus),
-        ("tracked order volume mismatch blocks reconciliation", TrackedQuantityMismatch)
+        ("tracked order volume mismatch blocks reconciliation", TrackedQuantityMismatch),
+        ("broadcast racing the initial snapshot cannot hide an active order", SnapshotRace)
     ];
 
     private static JsonElement J(object obj)
@@ -278,4 +279,23 @@ internal static class RecoveryStageTests
         Check(audit.Evaluate(orders.AllOrders).Issues.Any(x => x.Code == "ORDER_QUANTITY_MISMATCH"),
             "broker-reported quantity mismatch was not detected");
     }
+    private static Task SnapshotRace()
+    {
+        var audit = NewCompleteAudit();
+        audit.Invalidate("OrderEntity");
+        // A live working-order broadcast arrives while #Data.Query initial snapshot
+        // is still outstanding. The snapshot may be older than this update.
+        audit.AcceptUpdate("OrderEntity", J(new
+        {
+            NumEDocument = 5050, IdAccount = 1, IdSubAccount = 2,
+            IdRazdel = 3, IdOrderStatus = 14, Version = 3
+        }));
+        audit.AcceptSnapshot("OrderEntity", J(Array.Empty<object>()));
+        var report = audit.Evaluate([]);
+        Check(report.BrokerOrders == 1, "initial snapshot erased the earlier live order");
+        Check(!report.Clean && report.Issues.Any(x => x.Code == "INVALID_TABLE"),
+            "uncertain snapshot/event ordering silently authorized reconciliation");
+        return Task.CompletedTask;
+    }
+
 }
