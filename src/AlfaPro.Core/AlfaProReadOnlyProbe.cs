@@ -23,6 +23,8 @@ public static class AlfaProReadOnlyProbe
         bool CurrentSessionAuditClean,
         int AuditIssueCount,
         IReadOnlyList<string> AuditIssueCodes,
+        int BrokerOrderCount,
+        int BrokerPositionCount,
         int InstrumentCount,
         int MarketDepthEvents,
         int PublicTradeEvents,
@@ -86,6 +88,7 @@ public static class AlfaProReadOnlyProbe
             session.Recovery.HasAllSnapshots, audit.Clean,
             audit.Issues.Count, audit.Issues.Select(i => i.Code)
                 .Distinct(StringComparer.Ordinal).OrderBy(x => x).ToArray(),
+            audit.BrokerOrders, audit.BrokerPositions,
             session.Instruments.Count, Volatile.Read(ref books), Volatile.Read(ref trades),
             Volatile.Read(ref errors), Volatile.Read(ref disconnected) != 0,
             paramAvailable, counts.OrderBy(x => x.Key)
