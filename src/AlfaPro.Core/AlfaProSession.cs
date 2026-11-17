@@ -85,6 +85,7 @@ public sealed class AlfaProSession : IAsyncDisposable
     public AlfaProRecoveryAudit Recovery { get; } = new();
     public AlfaProAuditReport AuditRecovery() => Recovery.Evaluate(Orders.AllOrders);
     public AlfaProOrders Orders { get; }
+    public AlfaProLimitClient Limits { get; }
     public IReadOnlyCollection<AlfaInstrument> Instruments => _instruments.Values.ToArray();
     public bool IsConnected => _transport.IsConnected;
     public bool Authorized => Orders.BrokerAuthorized;
@@ -107,6 +108,7 @@ public sealed class AlfaProSession : IAsyncDisposable
             foreach (var item in AlfaProJson.Items(data)) ProcessEntity(type, item, false, true);
         };
         Orders = new AlfaProOrders(_transport);
+        Limits = new AlfaProLimitClient(_transport);
         _transport.Broadcast += ProcessBroadcast;
         _transport.Faulted += ex => Error?.Invoke(ex.Message);
         _transport.Disconnected += () =>
