@@ -477,7 +477,8 @@ public sealed class AlfaProOrders
         if (!Enum.IsDefined(evidence.Source) || !Enum.IsDefined(evidence.Outcome)
             || string.IsNullOrWhiteSpace(evidence.Reference) ||
             evidence.Reference.Length > 200 || evidence.Reference.Any(char.IsControl) ||
-            evidence.Note.Length > 500 || evidence.Note.Any(char.IsControl))
+            evidence.Note is null || evidence.Note.Length > 500 ||
+            evidence.Note.Any(char.IsControl))
             throw new ArgumentException(
                 "Evidence must have a known source, outcome, short external reference and no control characters");
     }
