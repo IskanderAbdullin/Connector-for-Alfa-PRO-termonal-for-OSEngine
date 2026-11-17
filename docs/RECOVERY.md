@@ -28,7 +28,7 @@ The audit checks account → subaccount → trading-section membership, positive
 
 `Clean=true` means **only** that no contradiction was detected in current-session snapshots. It **never sets** `AlfaProOrders.Reconciled=true` or independently enables trading.
 
-The connection is marked unreconciled after disconnect, subscription renewal/recreation, or loss of critical subscription state. A fresh read-only audit does not bypass the durable reconciliation requirement.
+The connection is marked unreconciled after disconnect, subscription renewal/recreation, or loss of critical subscription state. A fresh read-only audit does not bypass the independent broker reconciliation requirement. A local journal alone does not prove what the remote exchange executed after a network failure.
 
 ## Subscription recovery
 
@@ -80,7 +80,7 @@ The new scenarios test missing and complete snapshots, unmatched active orders, 
 
 ## Unresolved before real trading
 
-1. Implement an atomic, durable journal of **all** submitted orders and executions with explicit recovery across application/terminal restart.
+1. **Durable local write-ahead journal implemented in stage 3**; complete automatic recovery still requires broker-side evidence for prior sessions. See [JOURNAL.md](JOURNAL.md).
 2. Identify a provider-supported way to query historical orders and executions beyond the current session, or require operator resolution.
 3. Reconcile both broker positions and the strategies' internal expected positions.
 4. Verify real terminal message envelopes and field types, including `OrderRevisionEntity`, subscription expiry and order status identifiers.
