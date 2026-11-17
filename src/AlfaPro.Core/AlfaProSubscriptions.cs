@@ -25,6 +25,7 @@ public sealed class AlfaProSubscriptions
     }
 
     public event Action<string, JsonElement>? Snapshot;
+    public event Action<string>? SubscriptionRecreated;
 
     public async Task<Lease> SubscribeAsync(
         string type, IReadOnlyCollection<long>? keys = null, CancellationToken ct = default)
@@ -66,25 +67,62 @@ public sealed class AlfaProSubscriptions
         return lease;
     }
 
+    /// <summary>
+    /// Renew a valid lease or reacquire a new lease and initial snapshot after expiry.
+    /// All changes are serialized with SubscribeAsync, so two callers cannot race to
+    /// create the same subscription. A failed reacquisition throws and fails closed.
+    /// </summary>
     public async Task RenewDueAsync(CancellationToken ct = default)
     {
-        foreach (var lease in _leases.Values)
+        var refreshed = new List<(string Type, JsonElement Data)>();
+        var recreated = new List<string>();
+        await _subscribeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            if (lease.Expires - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(30)) continue;
-            try
+            foreach (var lease in _leases.Values.ToArray())
             {
-                var payload = new { Id = lease.Id };
-                var response = AlfaProJson.Unwrap(await _transport.RequestAsync("#Data.Query", payload, _timeout, ct)
-                    .ConfigureAwait(false));
-                AssertSubscribed(response, lease.Type);
-                lease.Expires = response.Field("Expires").Date() ?? DateTimeOffset.UtcNow.AddSeconds(30);
-            }
-            catch
-            {
-                _leases.TryRemove(lease.Key, out _);
-                throw;
+                if (lease.Expires - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(30)) continue;
+                try
+                {
+                    var response = AlfaProJson.Unwrap(await _transport.RequestAsync(
+                        "#Data.Query", new { Id = lease.Id }, _timeout, ct).ConfigureAwait(false));
+                    AssertSubscribed(response, lease.Type);
+                    var expiry = response.Field("Expires").Date();
+                    if (expiry is null || expiry <= DateTimeOffset.UtcNow)
+                        throw new InvalidDataException("Renewal did not supply a valid expiry");
+                    lease.Expires = expiry.Value;
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    // The old lease may be gone. Do not continue using its ID.
+                    _leases.TryRemove(lease.Key, out _);
+                    var payload = new Dictionary<string, object?>
+                    {
+                        ["Type"] = lease.Type,
+                        ["Init"] = true
+                    };
+                    if (lease.Keys.Length > 0) payload["Keys"] = lease.Keys;
+                    var response = AlfaProJson.Unwrap(await _transport.RequestAsync(
+                        "#Data.Query", payload, _timeout, ct).ConfigureAwait(false));
+                    AssertSubscribed(response, lease.Type);
+                    long newId = response.Field("Id").Int64();
+                    var expires = response.Field("Expires").Date();
+                    if (newId <= 0 || expires is null || expires <= DateTimeOffset.UtcNow)
+                        throw new InvalidDataException("Recreated subscription has invalid ID or expiry");
+                    _leases[lease.Key] = new Lease(
+                        lease.Key, lease.Type, lease.Keys, newId, expires.Value);
+                    recreated.Add(lease.Type);
+                    var data = response.Field("Data");
+                    if (data.ValueKind == JsonValueKind.Array)
+                        refreshed.Add((lease.Type, data.Clone()));
+                }
             }
         }
+        finally { _subscribeGate.Release(); }
+
+        // Client callbacks must never run under the subscription gate.
+        foreach (var type in recreated) SubscriptionRecreated?.Invoke(type);
+        foreach (var item in refreshed) Snapshot?.Invoke(item.Type, item.Data);
     }
 
     public async Task UnsubscribeAllAsync(CancellationToken ct = default)
