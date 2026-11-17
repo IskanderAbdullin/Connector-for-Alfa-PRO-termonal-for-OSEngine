@@ -26,7 +26,9 @@ internal static class JournalStageTests
         ("journal is locked against concurrent writers", ExclusiveOpen),
         ("events without submit intent cannot replay", RejectOrphanEvent),
         ("journal failure blocks a new send before it reaches the broker", JournalFailureNoSend),
-        ("replayed records remain unapproved after a clean current-session audit", AuditDoesNotAuthorize)
+        ("replayed records remain unapproved after a clean current-session audit", AuditDoesNotAuthorize),
+        ("late cancel acknowledgement cannot resurrect pending state after fill", LateCancelAckAfterFillReplay),
+        ("conflicting broker order IDs disable trading and survive restart as unknown", BrokerIdentityCollision)
     ];
 
     private static string TempPath()
@@ -440,4 +442,105 @@ internal static class JournalStageTests
         }
         finally { Cleanup(path); }
     }
+    private static async Task LateCancelAckAfterFillReplay()
+    {
+        string path = TempPath();
+        try
+        {
+            await using var mock = await MockProTerminal.StartAsync();
+            await using var transport = new AlfaProTransport();
+            await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+            long brokerId;
+            using (var journal = AlfaProOrderJournal.Open(path))
+            {
+                var orders = Ready(transport, journal);
+                transport.Broadcast += (channel, payload) =>
+                {
+                    if (channel == "#Data.Bus.OrderEntity")
+                        foreach (var item in AlfaProJson.Items(payload.Field("Updated")))
+                            orders.OnBrokerOrder(item);
+                };
+                var record = await orders.SubmitAsync(Request());
+                brokerId = record.BrokerId;
+                orders.OnBrokerOrder(Json(new
+                {
+                    NumEDocument = brokerId, IdOrderStatus = 14,
+                    Rest = 10, OrderStatusRevision = 1
+                }));
+                mock.OverrideReply = frame => Task.FromResult<MockReply?>(
+                    frame.Channel == "#Order.Cancel.Query"
+                        ? new MockReply(new { ResponseStatus = 0, Value = new { ErrorCode = 0 } },
+                            Early: new[]
+                            {
+                                new MockBroadcast("#Data.Bus.OrderEntity", new
+                                {
+                                    Updated = new[]
+                                    {
+                                        new { NumEDocument = brokerId, IdOrderStatus = 20,
+                                            Rest = 0, OrderStatusRevision = 2 }
+                                    }
+                                })
+                            })
+                        : null);
+                await orders.CancelAsync(1);
+                Check(record.State == AlfaSubmissionState.Filled && !record.CancelPending,
+                    "late cancel acknowledgement resurrected cancellation in memory");
+                Check(journal.Entries.Last().Kind == AlfaProJournalKind.CancelAcknowledged,
+                    "test did not capture the late service acknowledgement");
+            }
+            using (var reopened = AlfaProOrderJournal.Open(path))
+            {
+                var restored = new AlfaProOrders(transport, journal: reopened);
+                var record = restored.AllOrders.Single();
+                Check(record.State == AlfaSubmissionState.Filled &&
+                    !record.CancelPending && record.RemainingUnits == 0,
+                    "late cancel acknowledgement resurrected pending state after restart");
+            }
+        }
+        finally { Cleanup(path); }
+    }
+
+    private static async Task BrokerIdentityCollision()
+    {
+        string path = TempPath();
+        try
+        {
+            await using var mock = await MockProTerminal.StartAsync();
+            mock.OverrideReply = frame => Task.FromResult<MockReply?>(
+                frame.Channel == "#Order.Enter.Query"
+                    ? MockReply.Of(new
+                    {
+                        ResponseStatus = 0,
+                        Value = new { ClientOrderNum = 8002, NumEDocument = 8001, ErrorCode = 0 }
+                    })
+                    : null);
+            await using var transport = new AlfaProTransport();
+            await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+            using (var journal = AlfaProOrderJournal.Open(path))
+            {
+                var orders = Ready(transport, journal);
+                var first = await orders.SubmitAsync(Request(1));
+                Check(first.BrokerId == 8001, "first simulated broker ID changed");
+                await ExpectError(() => orders.SubmitAsync(Request(2)),
+                    "duplicate broker ID was silently assigned to two local orders");
+                Check(!orders.Reconciled && !orders.TradingEnabled,
+                    "broker identity collision did not block subsequent trading");
+                Check(orders.AllOrders.Count == 2 &&
+                    orders.AllOrders.Single(x => x.Request.LocalOrderId == 2).State ==
+                        AlfaSubmissionState.OutcomeUnknown,
+                    "colliding second submission must remain outcome-unknown");
+            }
+            using (var reopened = AlfaProOrderJournal.Open(path))
+            {
+                var restored = new AlfaProOrders(transport, journal: reopened);
+                Check(restored.RecoveredOrderCount == 2 &&
+                    restored.Find(8001, 8002)?.Request.LocalOrderId == 1 &&
+                    restored.AllOrders.Single(x => x.Request.LocalOrderId == 2).State ==
+                        AlfaSubmissionState.OutcomeUnknown,
+                    "correlated original order and uncertain second request did not replay");
+            }
+        }
+        finally { Cleanup(path); }
+    }
+
 }
