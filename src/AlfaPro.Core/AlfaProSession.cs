@@ -107,12 +107,20 @@ public sealed class AlfaProSession : IAsyncDisposable
             Recovery.AcceptSnapshot(type, data);
             foreach (var item in AlfaProJson.Items(data)) ProcessEntity(type, item, false, true);
         };
+        _subscriptions.SubscriptionRecreated += type =>
+        {
+            // New lease may be healthy, but trading state must be independently audited.
+            Orders.MarkUnreconciled();
+            Recovery.Invalidate(type);
+            Error?.Invoke("Subscription recreated; broker state requires audit: " + type);
+        };
         Orders = new AlfaProOrders(_transport);
         Limits = new AlfaProLimitClient(_transport);
         _transport.Broadcast += ProcessBroadcast;
         _transport.Faulted += ex => Error?.Invoke(ex.Message);
         _transport.Disconnected += () =>
         {
+            Recovery.InvalidateAll();
             Orders.MarkUnreconciled();
             Orders.BrokerAuthorized = false;
             Orders.ReadyToSign = false;
@@ -267,6 +275,7 @@ public sealed class AlfaProSession : IAsyncDisposable
                     Error?.Invoke("Subscription renewal failed: " + ex.Message);
                     // Missing an order/portfolio subscription invalidates any prior audit.
                     Orders.MarkUnreconciled();
+                    Recovery.InvalidateAll();
                 }
             }
         }
