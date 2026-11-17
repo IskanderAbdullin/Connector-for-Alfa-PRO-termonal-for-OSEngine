@@ -162,7 +162,8 @@ public sealed class AlfaProRecoveryAudit
             foreach (string invalid in _invalidTables.OrderBy(x => x))
                 issues.Add(new("INVALID_TABLE", invalid));
             if (issues.Count > 0)
-                return new(false, 0, 0, tracked.Length, issues);
+                return new(false, Table("OrderEntity").Count,
+                    Table("ClientPositionEntity").Count, tracked.Length, issues);
 
             var accounts = Table("ClientAccountEntity").Values.ToArray();
             var subs = Table("ClientSubAccountEntity").Values.ToArray();
