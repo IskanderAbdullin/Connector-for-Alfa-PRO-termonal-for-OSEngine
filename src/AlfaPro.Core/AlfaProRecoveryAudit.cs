@@ -43,6 +43,15 @@ public sealed class AlfaProRecoveryAudit
         }
     }
 
+    public void InvalidateAll()
+    {
+        lock (_sync)
+        {
+            _snapshots.Clear();
+            foreach (var type in RequiredTables) _invalidTables.Add(type);
+        }
+    }
+
     public void AcceptSnapshot(string type, JsonElement data)
     {
         if (!RequiredTables.Contains(type)) return;
