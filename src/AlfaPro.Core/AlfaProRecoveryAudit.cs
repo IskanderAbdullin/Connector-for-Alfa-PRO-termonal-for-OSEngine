@@ -192,6 +192,8 @@ public sealed class AlfaProRecoveryAudit
                 int status = (int)broker.Field("IdOrderStatus").Int64();
                 bool known = trackedByMarket.TryGetValue(id, out var local) ||
                     (client > 0 && trackedByClient.TryGetValue(client, out local));
+                if (status is not (5 or 6 or 10 or 12 or 14 or 15 or 18 or 20 or 21 or 23 or 24 or 25 or 26))
+                    issues.Add(new("ORDER_STATUS_UNKNOWN", "Broker order " + id + ": " + status));
                 if (!known)
                 {
                     if (ActiveBrokerStatuses.Contains(status))
@@ -200,6 +202,12 @@ public sealed class AlfaProRecoveryAudit
                 }
                 if (local is not null && !SameIdentity(broker, local.Request))
                     issues.Add(new("ORDER_IDENTITY_MISMATCH", "Broker order " + id));
+                if (local is not null)
+                {
+                    long quantity = broker.Field("Quantity").Int64();
+                    if (quantity > 0 && quantity != local.Request.QuantityUnits)
+                        issues.Add(new("ORDER_QUANTITY_MISMATCH", "Broker order " + id));
+                }
             }
 
             foreach (var local in tracked)
@@ -224,9 +232,16 @@ public sealed class AlfaProRecoveryAudit
                 long account = trade.Field("IdAccount").Int64();
                 if (brokerId <= 0 || account <= 0 || !accountIds.Contains(account))
                     issues.Add(new("EXECUTION_INVALID", "Execution has unresolved identity or account"));
-                if (brokerId > 0 && trackedByMarket.TryGetValue(brokerId, out var owned)
-                    && !SameIdentity(trade, owned.Request))
-                    issues.Add(new("EXECUTION_IDENTITY_MISMATCH", "Execution for order " + brokerId));
+                if (brokerId > 0 && trackedByMarket.TryGetValue(brokerId, out var owned))
+                {
+                    if (!SameIdentity(trade, owned.Request))
+                        issues.Add(new("EXECUTION_IDENTITY_MISMATCH", "Execution for order " + brokerId));
+                }
+                else
+                {
+                    // Manual / pre-existing operations require explicit operator reconciliation.
+                    issues.Add(new("UNTRACKED_EXECUTION", "Execution for untracked order " + brokerId));
+                }
             }
 
             return new(issues.Count == 0, orders.Count, positions.Length, tracked.Length, issues);
