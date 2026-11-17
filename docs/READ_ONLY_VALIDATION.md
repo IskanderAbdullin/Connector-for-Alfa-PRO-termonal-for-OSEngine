@@ -39,6 +39,7 @@ Replace `123456` with an actual instrument IdFi. Omit `--fi` if you do not know 
 - Number of known instruments and count of broker orders/positions.
 - Non-sensitive recovery-audit issue codes, **not full error messages**.
 - Counts of observed entity updates, order books and public trades.
+- A count of missing **fixed, expected API field names** (e.g. `ClientPositionEntity.TorgPos`), which helps identify a real terminal API-schema mismatch without exporting private field values.
 - Two explicit safety flags: `NoTradingCommandsWereIssued=true`, `SuitableToAuthorizeLiveTrading=false`.
 
 The report omits the token, account/subaccount/section IDs, instrument identifiers, security prices, order details and raw broker JSON. You can send the sanitized report for review. **Do not share logs, screenshots, broker statements or the underlying order journal without separately checking that they contain no private details.**
