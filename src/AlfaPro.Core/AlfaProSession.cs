@@ -99,10 +99,10 @@ public sealed class AlfaProSession : IAsyncDisposable
     public event Action? Disconnected;
     public event Action? AuthorizationChanged;
 
-    public AlfaProSession()
+    public AlfaProSession(AlfaProOrderJournal? journal = null)
     {
         _subscriptions = new AlfaProSubscriptions(_transport, _timeout);
-        Orders = new AlfaProOrders(_transport);
+        Orders = new AlfaProOrders(_transport, journal: journal);
         Limits = new AlfaProLimitClient(_transport);
         _subscriptions.Snapshot += (type, data) =>
         {
