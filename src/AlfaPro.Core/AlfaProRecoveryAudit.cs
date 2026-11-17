@@ -25,6 +25,8 @@ public sealed class AlfaProRecoveryAudit
     private readonly Dictionary<string, Dictionary<long, JsonElement>> _tables = new();
     private readonly HashSet<string> _snapshots = [];
     private readonly HashSet<string> _invalidTables = [];
+    // Broadcasts received after listen but before an initial snapshot response.
+    private readonly Dictionary<string, Dictionary<long, JsonElement?>> _earlyUpdates = new();
 
     public bool HasAllSnapshots
     {
@@ -49,6 +51,7 @@ public sealed class AlfaProRecoveryAudit
         {
             _snapshots.Clear();
             foreach (var type in RequiredTables) _invalidTables.Add(type);
+            _earlyUpdates.Clear();
         }
     }
 
@@ -76,8 +79,34 @@ public sealed class AlfaProRecoveryAudit
                 _invalidTables.Add(type);
                 return;
             }
+            // A broadcast may arrive after listen but before the initial snapshot.
+            // Preserve its contents and fail closed until a later clean refresh if
+            // snapshot/update ordering cannot be proven from documented revisions.
+            bool raced = _earlyUpdates.TryGetValue(type, out var events) && events.Count > 0;
+            if (raced && events is not null)
+            {
+                foreach (var pending in events)
+                {
+                    if (pending.Value is null)
+                    {
+                        next.Remove(pending.Key);
+                        continue;
+                    }
+                    var update = pending.Value.Value;
+                    if (next.TryGetValue(pending.Key, out var old))
+                    {
+                        long olderVersion = old.Field("Version").Int64();
+                        long newerVersion = update.Field("Version").Int64();
+                        if (olderVersion > 0 && newerVersion > 0 &&
+                            olderVersion > newerVersion) continue;
+                    }
+                    next[pending.Key] = update.Clone();
+                }
+                _earlyUpdates.Remove(type);
+            }
             _tables[type] = next;
-            _invalidTables.Remove(type);
+            if (raced) _invalidTables.Add(type);
+            else _invalidTables.Remove(type);
             _snapshots.Add(type);
         }
     }
@@ -96,6 +125,12 @@ public sealed class AlfaProRecoveryAudit
             }
             if (!_tables.TryGetValue(type, out var records))
                 _tables[type] = records = new Dictionary<long, JsonElement>();
+            if (!_snapshots.Contains(type))
+            {
+                if (!_earlyUpdates.TryGetValue(type, out var pending))
+                    _earlyUpdates[type] = pending = new Dictionary<long, JsonElement?>();
+                pending[key] = deleted ? null : item.Clone();
+            }
             if (deleted)
             {
                 records.Remove(key);
