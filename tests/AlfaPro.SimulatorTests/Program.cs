@@ -29,7 +29,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("confirmed cancellation after partial fill preserves executed quantity", CancelAfterPartial),
     ("market orders omit the limit price and retain quantity in pieces", MarketOrderParameters),
     ("events from another account cannot mutate an order", CrossAccountIsolation)
-};
+}.Concat(RecoveryStageTests.Tests).ToArray();
 
 int passed = 0, failed = 0;
 var outcomes = new List<ScenarioResult>();
@@ -198,10 +198,15 @@ static async Task FailedRenewal()
     var subs = new AlfaProSubscriptions(transport, TimeSpan.FromSeconds(2));
     var lease = await subs.SubscribeAsync("OrderBookEntity", [100]);
     mock.OverrideReply = frame => Task.FromResult<MockReply?>(frame.Channel == "#Data.Query"
-        && frame.Payload.Field("Id").Int64() == lease.Id
-        ? MockReply.Of(new { Error = new { Code = 503, Message = "subscription expired" } })
+        && (frame.Payload.Field("Id").Int64() == lease.Id ||
+            frame.Payload.Field("Type").Text() == "OrderBookEntity")
+        ? MockReply.Of(new { Error = new { Code = 503, Message = "subscription unavailable" } })
         : null);
-    await ExpectError(() => subs.RenewDueAsync(), "failed renewal silently accepted");
+    await ExpectError(() => subs.RenewDueAsync(),
+        "failed renewal and failed re-subscribe were silently accepted");
+    // A failed re-subscription must not leave an old lease considered valid.
+    Check(mock.Subscriptions("OrderBookEntity") == 2,
+        "failed renewal did not attempt to recreate the subscription");
 }
 
 static async Task SessionMarketData()
