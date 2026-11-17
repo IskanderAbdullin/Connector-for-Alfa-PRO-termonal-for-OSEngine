@@ -99,11 +99,11 @@ Test results may vary if the actual Alfa PRO API schema changes. Compare with a 
 
 ## Remaining coverage gaps
 
-These tests do **not** exercise actual exchange fills, real terminal auth/signing, persistent order recovery between application restarts, genuine subscription expiration timing, broker-side rate quotas, real margin and limit-service semantics, all instruments and bonds, history candles, multi-day sessions, or live latency.
+These tests do **not** exercise actual exchange fills, real terminal auth/signing, authoritative prior-session broker reconciliation, genuine subscription expiration timing, broker-side rate quotas, real margin and limit-service semantics, all instruments and bonds, history candles, multi-day sessions, or live latency.
 
 The current OsEngine connector still has incomplete trading reconciliation and intentionally blocks live trading until that safety work is implemented and verified. Do not disable that safeguard just to pass a test.
 
-A future real-terminal test stage should run **read-only** first: connect with API enabled, collect anonymized instrument/account/reference responses, validate correct mappings and subscriptions, and only then assess guarded live orders with separate explicit authorization.
+Stage 3 adds independent on-disk journal and restart replay tests; see [JOURNAL.md](JOURNAL.md). They do not prove exchange-side exactly-once behavior.\n\nA future real-terminal test stage should run **read-only** first: connect with API enabled, collect anonymized instrument/account/reference responses, validate correct mappings and subscriptions, and only then assess guarded live orders with separate explicit authorization.
 
 ## Stage 2 recovery extension
 
