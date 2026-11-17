@@ -22,7 +22,10 @@ internal static class RecoveryStageTests
         ("session captures snapshots without granting trading readiness", SessionReadOnlyAudit),
         ("PRO limit service maps free funds and portfolio basis exactly", LimitSuccess),
         ("invalid/malformed broker limit response is rejected", LimitValidation),
-        ("expired lease automatically reacquires new ID and snapshot", LeaseRecreation)
+        ("expired lease automatically reacquires new ID and snapshot", LeaseRecreation),
+        ("untracked execution blocks reconciliation", UntrackedExecution),
+        ("unknown broker order status blocks reconciliation", UnknownStatus),
+        ("tracked order volume mismatch blocks reconciliation", TrackedQuantityMismatch)
     ];
 
     private static JsonElement J(object obj)
@@ -224,5 +227,55 @@ internal static class RecoveryStageTests
             "failed renewal did not reacquire a fresh ID plus snapshot");
         Check(mock.Subscriptions("OrderBookEntity") == 2,
             "new subscription missing");
+    }
+
+    private static Task UntrackedExecution()
+    {
+        var audit = NewCompleteAudit();
+        audit.AcceptUpdate("ClientOperationEntity", J(new
+        {
+            IdOperation = 777, IdAccount = 1, IdSubAccount = 2,
+            IdRazdel = 3, NumEDocument = 12345, Quantity = 10
+        }));
+        Check(audit.Evaluate([]).Issues.Any(x => x.Code == "UNTRACKED_EXECUTION"),
+            "external execution was silently ignored by the audit");
+        return Task.CompletedTask;
+    }
+
+    private static Task UnknownStatus()
+    {
+        var audit = NewCompleteAudit();
+        audit.AcceptUpdate("OrderEntity", J(new
+        {
+            NumEDocument = 757, IdAccount = 1, IdSubAccount = 2,
+            IdRazdel = 3, IdOrderStatus = 99
+        }));
+        Check(audit.Evaluate([]).Issues.Any(x => x.Code == "ORDER_STATUS_UNKNOWN"),
+            "unknown order-state code was considered harmless");
+        return Task.CompletedTask;
+    }
+
+    private static async Task TrackedQuantityMismatch()
+    {
+        await using var mock = await MockProTerminal.StartAsync();
+        await using var transport = new AlfaProTransport();
+        await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
+        var orders = new AlfaProOrders(transport)
+        {
+            TradingEnabled = true, BrokerAuthorized = true, ReadyToSign = true,
+            Reconciled = true // controlled simulator only, never live
+        };
+        var tracked = await orders.SubmitAsync(Order());
+        var audit = NewCompleteAudit();
+        audit.AcceptUpdate("OrderEntity", J(new
+        {
+            NumEDocument = tracked.BrokerId,
+            ClientOrderNum = tracked.ClientOrderNumber,
+            IdAccount = 1, IdSubAccount = 2,
+            IdRazdel = 3, IdObject = 123,
+            Quantity = 11, Rest = 11, IdOrderStatus = 14
+        }));
+        Check(audit.Evaluate(orders.AllOrders).Issues.Any(x => x.Code == "ORDER_QUANTITY_MISMATCH"),
+            "broker-reported quantity mismatch was not detected");
     }
 }
