@@ -3,3 +3,7 @@
 test-results/
 .vs/
 *.user
+# Never commit real trading history or secrets.
+*.jsonl
+*.journal
+*.journal-wal
