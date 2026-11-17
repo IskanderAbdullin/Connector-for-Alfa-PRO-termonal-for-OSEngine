@@ -21,7 +21,9 @@ internal static class DiagnosticStageTests
         ("operator observation is append-only and never marks order filled", NoteDoesNotChangeState),
         ("operator observation survives process restart and preserves unknown outcome", NoteSurvivesRestart),
         ("invalid operator evidence is rejected without journal changes", InvalidEvidence),
-        ("operator evidence cannot be added without a durable journal", ReviewRequiresJournal)
+        ("operator evidence cannot be added without a durable journal", ReviewRequiresJournal),
+        ("read-only schema check reports missing field names without their values", MissingSchemaFields),
+        ("null operator notes are rejected without changing the journal", NullEvidenceNote)
     ];
 
     private static string JournalPath()
@@ -289,4 +291,57 @@ internal static class DiagnosticStageTests
         transport.DisposeAsync().AsTask().GetAwaiter().GetResult();
         return Task.CompletedTask;
     }
+    private static async Task MissingSchemaFields()
+    {
+        await using var mock = await MockProTerminal.StartAsync();
+        mock.Snapshot("ClientAccountEntity", new { IdAccount = 111111 });
+        mock.Snapshot("ClientSubAccountEntity", new { IdAccount = 111111, IdSubAccount = 222222 });
+        mock.Snapshot("SubAccountRazdelEntity", new {
+            IdAccount = 111111, IdSubAccount = 222222, IdRazdel = 333333
+        });
+        mock.Snapshot("ClientPositionEntity", new {
+            IdPosition = 11, IdAccount = 111111, IdSubAccount = 222222,
+            IdRazdel = 333333, IdObject = 444444
+            // TorgPos deliberately missing: malformed provider contract.
+        });
+        var report = await AlfaProReadOnlyProbe.RunAsync(
+            mock.Endpoint, mock.ExpectedToken, TimeSpan.Zero);
+        Check(report.MissingRequiredFieldCounts.TryGetValue(
+            "ClientPositionEntity.TorgPos", out int missing) && missing == 1,
+            "missing required field not surfaced in sanitized schema report");
+        string json = JsonSerializer.Serialize(report);
+        Check(!json.Contains("111111", StringComparison.Ordinal) &&
+              !json.Contains("222222", StringComparison.Ordinal) &&
+              !json.Contains("333333", StringComparison.Ordinal) &&
+              !json.Contains("444444", StringComparison.Ordinal),
+            "schema report exposed private identifiers");
+        Check(!report.SuitableToAuthorizeLiveTrading, "malformed record enabled trading");
+    }
+
+    private static Task NullEvidenceNote()
+    {
+        string path = JournalPath();
+        try
+        {
+            using var journal = AlfaProOrderJournal.Open(path);
+            journal.Append(new AlfaProJournalEntry(
+                AlfaProJournalKind.SubmitIntent, 10, Request: Request()));
+            var transport = new AlfaProTransport();
+            var orders = new AlfaProOrders(transport, journal: journal);
+            long before = journal.LastSequence;
+            try
+            {
+                orders.RecordOperatorObservation(10, new AlfaProOperatorObservation(
+                    AlfaProEvidenceSource.BrokerStatement, AlfaProObservedOutcome.Filled,
+                    "statement-page-5", null!));
+                throw new InvalidOperationException("null note was accepted");
+            }
+            catch (ArgumentException) { }
+            Check(journal.LastSequence == before, "bad evidence was persisted");
+            transport.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            return Task.CompletedTask;
+        }
+        finally { Clean(path); }
+    }
+
 }
