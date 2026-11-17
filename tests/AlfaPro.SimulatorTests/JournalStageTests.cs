@@ -85,7 +85,7 @@ internal static class JournalStageTests
 
     private static async Task JournalMandatory()
     {
-        await await using var mock = await MockProTerminal.StartAsync();
+        await using var mock = await MockProTerminal.StartAsync();
         await using var transport = new AlfaProTransport();
         await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
         var orders = Ready(transport, null);
