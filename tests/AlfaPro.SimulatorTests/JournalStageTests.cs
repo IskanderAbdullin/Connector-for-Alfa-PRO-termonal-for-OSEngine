@@ -85,7 +85,7 @@ internal static class JournalStageTests
 
     private static async Task JournalMandatory()
     {
-        await using var mock = await MockProTerminal.StartAsync();
+        await await using var mock = await MockProTerminal.StartAsync();
         await using var transport = new AlfaProTransport();
         await transport.ConnectAsync(mock.Endpoint, mock.ExpectedToken);
         var orders = Ready(transport, null);
@@ -222,7 +222,7 @@ internal static class JournalStageTests
             {
                 var orders = Ready(transport, journal);
                 brokerId = (await orders.SubmitAsync(Request())).BrokerId;
-                Check(orders.OnOwnExecution(Json(execution with { })) == false,
+                Check(orders.OnOwnExecution(Json(execution)) == false,
                     "uncorrelated fill must not be emitted");
                 Check(orders.OnOwnExecution(Json(new
                 {
