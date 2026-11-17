@@ -123,6 +123,11 @@ public sealed class AlfaProOrders
                     if ((order.BrokerId > 0 && order.BrokerId != item.BrokerId) ||
                         (order.ClientOrderNumber > 0 && order.ClientOrderNumber != item.ClientOrderNumber))
                         throw new InvalidDataException("Conflicting broker identifiers in journal");
+                    if ((_broker.TryGetValue(item.BrokerId, out var otherBroker) &&
+                            !ReferenceEquals(otherBroker, order)) ||
+                        (_client.TryGetValue(item.ClientOrderNumber, out var otherClient) &&
+                            !ReferenceEquals(otherClient, order)))
+                        throw new InvalidDataException("Conflicting order identity in durable history");
                     order.BrokerId = item.BrokerId;
                     order.ClientOrderNumber = item.ClientOrderNumber;
                     _broker[order.BrokerId] = order;
@@ -262,15 +267,29 @@ public sealed class AlfaProOrders
         if (clientNum <= 0 || brokerId <= 0)
             throw new InvalidDataException("Broker acknowledgement lacks verified order identifiers");
 
-        lock (record.Sync)
+        lock (_submissionSync)
         {
-            Persist(new AlfaProJournalEntry(AlfaProJournalKind.SubmitAccepted,
-                request.LocalOrderId, BrokerId: brokerId, ClientOrderNumber: clientNum));
-            record.ClientOrderNumber = clientNum;
-            record.BrokerId = brokerId;
-            _client[clientNum] = record;
-            _broker[brokerId] = record;
-            record.State = AlfaSubmissionState.ServiceAccepted;
+            lock (record.Sync)
+            {
+                if ((_broker.TryGetValue(brokerId, out var otherBroker) &&
+                        !ReferenceEquals(otherBroker, record)) ||
+                    (_client.TryGetValue(clientNum, out var otherClient) &&
+                        !ReferenceEquals(otherClient, record)))
+                {
+                    // Two requests sharing one broker identity must never be conflated.
+                    TradingEnabled = false;
+                    Reconciled = false;
+                    throw new InvalidDataException(
+                        "Conflicting broker order identifiers: explicit reconciliation required");
+                }
+                Persist(new AlfaProJournalEntry(AlfaProJournalKind.SubmitAccepted,
+                    request.LocalOrderId, BrokerId: brokerId, ClientOrderNumber: clientNum));
+                record.ClientOrderNumber = clientNum;
+                record.BrokerId = brokerId;
+                _client[clientNum] = record;
+                _broker[brokerId] = record;
+                record.State = AlfaSubmissionState.ServiceAccepted;
+            }
         }
         // Broker broadcasts may precede the response, including terminal fill states.
         if (_earlyBrokerOrders.TryRemove(brokerId, out var early))
