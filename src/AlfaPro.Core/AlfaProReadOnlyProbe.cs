@@ -13,6 +13,23 @@ namespace AlfaPro.Core;
 /// </summary>
 public static class AlfaProReadOnlyProbe
 {
+    // Only fixed schema identifiers are exported, never field contents or arbitrary input keys.
+    private static readonly IReadOnlyDictionary<string, string[]> RequiredFields =
+        new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["AssetInfoEntity"] = ["IdObject", "Ticker", "Instruments"],
+            ["ClientAccountEntity"] = ["IdAccount"],
+            ["ClientSubAccountEntity"] = ["IdAccount", "IdSubAccount"],
+            ["SubAccountRazdelEntity"] = ["IdAccount", "IdSubAccount", "IdRazdel"],
+            ["ClientBalanceEntity"] = ["IdAccount", "IdSubAccount", "IdRazdelGroup"],
+            ["ClientPositionEntity"] = ["IdPosition", "IdAccount", "IdSubAccount", "IdRazdel", "IdObject", "TorgPos"],
+            ["OrderEntity"] = ["NumEDocument", "ClientOrderNum", "IdOrderStatus", "Rest"],
+            ["ClientOperationEntity"] = ["IdOperation", "NumEDocument", "IdAccount"],
+            ["FinInfoParamsEntity"] = ["IdFi", "Lot", "PriceStep"],
+            ["OrderBookEntity"] = ["IdFi", "Lines"],
+            ["AllTradeEntity"] = ["Price", "Qty"]
+        };
+
     public sealed record Report(
         DateTimeOffset StartedUtc,
         DateTimeOffset FinishedUtc,
@@ -32,6 +49,7 @@ public static class AlfaProReadOnlyProbe
         bool ConnectionLostDuringObservation,
         bool RequestedInstrumentParametersAvailable,
         IReadOnlyDictionary<string, int> ReceivedEntityCounts,
+        IReadOnlyDictionary<string, int> MissingRequiredFieldCounts,
         bool NoTradingCommandsWereIssued = true,
         bool SuitableToAuthorizeLiveTrading = false);
 
@@ -56,11 +74,12 @@ public static class AlfaProReadOnlyProbe
 
         var start = DateTimeOffset.UtcNow;
         var counts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
+        var missing = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         int books = 0, trades = 0, errors = 0, disconnected = 0;
         await using var session = new AlfaProSession();
         // Never enable trading: this component is strictly a passive diagnostic.
         session.Orders.TradingEnabled = false;
-        session.EntityUpdated += (type, _) =>
+        session.EntityUpdated += (type, entity) =>
         {
             if (type is "AssetInfoEntity" or "MarketBoardEntity" or "AllowedOrderParamEntity"
                 or "ClientAccountEntity" or "ClientSubAccountEntity"
@@ -68,7 +87,17 @@ public static class AlfaProReadOnlyProbe
                 or "ClientPositionEntity" or "OrderEntity"
                 or "OrderRevisionEntity" or "ClientOperationEntity"
                 or "FinInfoParamsEntity" or "OrderBookEntity" or "AllTradeEntity")
+            {
                 counts.AddOrUpdate(type, 1, (_, n) => checked(n + 1));
+                if (RequiredFields.TryGetValue(type, out var required))
+                {
+                    foreach (var field in required)
+                    {
+                        if (entity.Field(field).ValueKind == System.Text.Json.JsonValueKind.Undefined)
+                            missing.AddOrUpdate(type + "." + field, 1, (_, n) => checked(n + 1));
+                    }
+                }
+            }
         };
         session.DepthUpdated += _ => Interlocked.Increment(ref books);
         session.PublicTrade += _ => Interlocked.Increment(ref trades);
@@ -92,6 +121,8 @@ public static class AlfaProReadOnlyProbe
             session.Instruments.Count, Volatile.Read(ref books), Volatile.Read(ref trades),
             Volatile.Read(ref errors), Volatile.Read(ref disconnected) != 0,
             paramAvailable, counts.OrderBy(x => x.Key)
+                .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal),
+            missing.OrderBy(x => x.Key)
                 .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal));
     }
 }
