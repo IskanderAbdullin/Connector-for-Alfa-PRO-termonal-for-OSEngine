@@ -88,8 +88,15 @@ static AlfaOrderRequest Order(int localId = 1) =>
 static object BrokerState(bool auth, bool ready) =>
     new { States = new { User = new { AuthStatus = auth ? 2 : 0 }, SignService = new { ReadyToSign = ready } } };
 static AlfaProOrders Ready(AlfaProTransport transport, TimeSpan? timeout = null)
-    => new(transport, timeout) { RequireDurableJournal = false, TradingEnabled = true,
-        BrokerAuthorized = true, ReadyToSign = true, Reconciled = true };
+    {
+    var orders = new AlfaProOrders(transport, timeout)
+    {
+        RequireDurableJournal = false,
+        TradingEnabled = true, BrokerAuthorized = true, ReadyToSign = true
+    };
+    orders.MarkReconciled(); // Test-only mock readiness.
+    return orders;
+}
 
 static async Task RejectBadToken()
 {
