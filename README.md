@@ -78,6 +78,14 @@ The simulator tests use a real *local* WebSocket server; there are no real API t
 
 See [Simulator design, scenario matrix and limitations](docs/SIMULATOR.md).
 
+## Recovery and broker limits (stage 2)
+
+The connector now includes a read-only reconciliation audit for broker accounts, trading sections, current-session orders, executions and positions; expired subscription leases can be reacquired; and the Alfa PRO limit service is accessible through a typed query.
+
+**This is not full restart recovery.** Existing-session snapshots cannot prove the outcome of orders from previous sessions; live order submission remains disabled until durable, independently verified reconciliation is implemented.
+
+See [Recovery architecture, limit service and remaining blockers](docs/RECOVERY.md).
+
 The GitHub Actions workflow also builds an OsEngine Windows integration. **Simulator tests do not verify behavior against the actual Alfa PRO Terminal.**
 
 ## Architecture
