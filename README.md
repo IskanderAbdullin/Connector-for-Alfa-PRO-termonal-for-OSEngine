@@ -23,13 +23,15 @@ The repository contains code, not an independently installable trading applicati
 - Account section, balance and position event conversion into OsEngine models.
 - Basic allowed order parameter lookup and guarded limit/market order submission.
 - Order cancellations, broker-status mapping, partial fills, execution de-duplication and early event reconciliation.
+- Exclusive, checksummed, append-only durable order journal: write-ahead submit/cancel intents, fsync and restart replay of broker IDs, own fills and open/unknown outcomes.
+- Read-only current-session recovery audit, subscription re-creation and typed broker-limit queries.
 - Standard OsEngine `IServerRealization` and conservative `IServerPermission` integration.
 - Unit-check console project and Windows OsEngine integration build workflow.
 - Installer that makes minimal, reviewable edits to OsEngine `ServerMaster.cs`.
 
 ## Not completed / not verified
 
-- Full durable order registry across program restarts; history from previous broker sessions.
+- Automatic reconciliation of orders and fills from previous broker sessions (durable local journal is implemented, but broker-side historical matching remains pending).
 - Complete reconciliation of pre-existing, unmatched or manually placed broker orders.
 - Subscription recovery after every possible expiry/failure (current implementation fails closed).
 - Accurate `RCode` / account-section eligibility verification for all market types.
@@ -65,7 +67,8 @@ OsEngine's project uses SDK-default recursive source inclusion, so adding the C#
 4. Run OsEngine and select connector **AlfaPro**.
 5. Set `PRO WebSocket URL` to `ws://127.0.0.1:3366/router/`.
 6. Enter `PRO Bearer Token`.
-7. Keep **Allow LIVE trading = false** while validating read-only data and portfolio output.
+7. Check the **Durable order journal path** setting: its default is a private file in the current Windows user's LocalAppData/OsEngine/AlfaPro directory. Keep that file across reinstalls and use a stable disk.
+8. Keep **Allow LIVE trading = false** while validating read-only data and portfolio output.
 
 ## Tests
 
@@ -82,9 +85,17 @@ See [Simulator design, scenario matrix and limitations](docs/SIMULATOR.md).
 
 The connector now includes a read-only reconciliation audit for broker accounts, trading sections, current-session orders, executions and positions; expired subscription leases can be reacquired; and the Alfa PRO limit service is accessible through a typed query.
 
-**This is not full restart recovery.** Existing-session snapshots cannot prove the outcome of orders from previous sessions; live order submission remains disabled until durable, independently verified reconciliation is implemented.
+**This is not full broker-side restart reconciliation.** The local journal now survives process restarts, but current-session snapshots cannot prove the outcome of orders from previous sessions. Live order submission remains disabled until independently verified reconciliation is implemented.
 
 See [Recovery architecture, limit service and remaining blockers](docs/RECOVERY.md).
+
+## Durable order journal (stage 3)
+
+`AlfaProOrderJournal` now persists every new order intent **before** sending it over the WebSocket, then records broker acknowledgements, status transitions, own executions and cancellation requests. On restart, previous local order IDs and execution IDs are restored. Missing broker acknowledgements remain uncertain; there is **no automatic re-submission**.
+
+Corrupted/truncated files or duplicate broker identity mappings fail closed. File locking prevents two OsEngine instances sharing one journal simultaneously. Journal storage costs an fsync on each trading event; latency on your own VPS remains to be measured.
+
+See [Journal setup, crash-consistency design, replay tests and remaining risks](docs/JOURNAL.md).
 
 The GitHub Actions workflow also builds an OsEngine Windows integration. **Simulator tests do not verify behavior against the actual Alfa PRO Terminal.**
 
@@ -92,7 +103,7 @@ The GitHub Actions workflow also builds an OsEngine Windows integration. **Simul
 
 ```text
 OsEngine Robots -> IServerRealization -> AlfaProSession
-                                       |-> AlfaProOrders
+                                       |-> AlfaProOrders -> AlfaProOrderJournal
                                        |-> AlfaProSubscriptions
                                        |-> AlfaProTransport -> PRO Terminal WebSocket
 ```
