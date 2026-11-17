@@ -160,8 +160,9 @@ public sealed class AlfaProOrders
                     order.CancelPending = true;
                     break;
                 case AlfaProJournalKind.CancelAcknowledged:
-                    // The service acknowledgement does not prove a broker-side cancellation.
-                    order.CancelPending = true;
+                    // A late service acknowledgement MUST NOT resurrect CancelPending
+                    // after a terminal Fill/Cancel/Reject was already journaled.
+                    if (!IsTerminal(order.State)) order.CancelPending = true;
                     break;
                 default:
                     throw new InvalidDataException("Unsupported journal event kind");
