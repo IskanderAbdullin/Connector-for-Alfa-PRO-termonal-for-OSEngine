@@ -1,11 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace AlfaPro.Core;
 
@@ -23,7 +23,10 @@ public sealed record AlfaOrderRequest(
     bool IsMarket,
     string Comment);
 
-public enum AlfaSubmissionState { Preparing, OutcomeUnknown, ServiceAccepted, Rejected, Active, PartiallyFilled, Filled, Cancelled }
+public enum AlfaSubmissionState
+{
+    Preparing, OutcomeUnknown, ServiceAccepted, Rejected, Active, PartiallyFilled, Filled, Cancelled
+}
 
 public sealed class AlfaOrderRecord
 {
@@ -32,7 +35,6 @@ public sealed class AlfaOrderRecord
     public long ClientOrderNumber { get; internal set; }
     public AlfaSubmissionState State { get; internal set; } = AlfaSubmissionState.Preparing;
     public long RemainingUnits { get; internal set; }
-    public HashSet<long> ExecutionIds { get; } = [];
     public bool CancelPending { get; internal set; }
     public long LastVersion { get; internal set; }
     public object Sync { get; } = new();
@@ -45,13 +47,16 @@ public sealed class AlfaOrderRecord
 }
 
 /// <summary>
-/// Broker-safe order command coordinator. No unknown submission is retried.
-/// An acknowledged service request does NOT establish a final broker state.
+/// Fail-closed order coordinator. Submit intents are journaled and flushed before transport send.
+/// Requests with unknown results are never retried automatically, including after process restart.
 /// </summary>
 public sealed class AlfaProOrders
 {
     private readonly AlfaProTransport _transport;
+    private readonly AlfaProOrderJournal? _journal;
     private readonly TimeSpan _timeout;
+    private readonly object _submissionSync = new();
+    private readonly object _executionSync = new();
     private readonly ConcurrentDictionary<int, AlfaOrderRecord> _local = new();
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _broker = new();
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _client = new();
@@ -66,165 +71,314 @@ public sealed class AlfaProOrders
     public bool TradingEnabled { get; set; }
     public bool BrokerAuthorized { get; set; }
     public bool ReadyToSign { get; set; }
-    public bool Reconciled { get; set; }
+    public bool Reconciled { get; private set; }
 
-    public AlfaProOrders(AlfaProTransport transport, TimeSpan? timeout = null)
+    /// <summary>
+    /// This may ONLY be disabled in isolated simulator tests. Production defaults to fail closed.
+    /// It does not replace broker state reconciliation.
+    /// </summary>
+    public bool RequireDurableJournal { get; set; } = true;
+
+    public bool HasDurableJournal => _journal?.Healthy == true;
+    public int RecoveredOrderCount { get; }
+    public IReadOnlyCollection<AlfaOrderRecord> AllOrders => _local.Values.ToArray();
+
+    public AlfaProOrders(AlfaProTransport transport, TimeSpan? timeout = null,
+        AlfaProOrderJournal? journal = null)
     {
         _transport = transport;
         _timeout = timeout ?? TimeSpan.FromSeconds(10);
+        _journal = journal;
+        if (journal is not null)
+        {
+            ReplayJournal(journal.Entries);
+            RecoveredOrderCount = _local.Count;
+        }
+        // Never derive readiness from the restored journal alone.
+        Reconciled = false;
     }
 
-    public IReadOnlyCollection<AlfaOrderRecord> AllOrders => _local.Values.ToArray();
-
-    public async Task<AlfaOrderRecord> SubmitAsync(AlfaOrderRequest order, CancellationToken ct = default)
+    private void ReplayJournal(IReadOnlyList<AlfaProJournalEntry> events)
     {
-        if (!TradingEnabled || !BrokerAuthorized || !ReadyToSign || !Reconciled)
-            throw new InvalidOperationException("Trading not ready or not explicitly enabled");
-        if (order.Side != 1 && order.Side != -1) throw new ArgumentException("Invalid order side");
-        if (order.Account <= 0 || order.SubAccount <= 0 || order.Section <= 0
-            || order.ObjectId <= 0 || order.MarketBoardId <= 0 || order.AllowedOrderParamsId <= 0)
-            throw new ArgumentException("Missing verified broker/account/order-parameter identifiers");
-        if (order.QuantityUnits <= 0 || (!order.IsMarket && order.LimitPrice <= 0))
-            throw new ArgumentException("Invalid order quantity or price");
-
-        var record = new AlfaOrderRecord(order);
-        if (!_local.TryAdd(order.LocalOrderId, record))
-            throw new InvalidOperationException("An order with this local ID already exists; never resubmit blindly");
-        record.State = AlfaSubmissionState.OutcomeUnknown;
-        OrderChanged?.Invoke(record);
-        try
+        foreach (var item in events)
         {
-            var payload = new Dictionary<string, object?>
+            if (item.LocalOrderId <= 0)
+                throw new InvalidDataException("Invalid local ID in trading journal");
+            if (item.Kind == AlfaProJournalKind.SubmitIntent)
             {
-                ["IdAccount"] = order.Account,
-                ["IdSubAccount"] = order.SubAccount,
-                ["IdRazdel"] = order.Section,
-                ["IdPriceControlType"] = 0,
-                ["IdObject"] = order.ObjectId,
-                ["BuySell"] = order.Side,
-                ["Quantity"] = order.QuantityUnits,
-                ["Comment"] = order.Comment,
-                ["IdAllowedOrderParams"] = order.AllowedOrderParamsId
-            };
-            if (!order.IsMarket) payload["LimitPrice"] = order.LimitPrice;
-            var reply = AlfaProJson.Unwrap(await _transport.RequestAsync(
-                "#Order.Enter.Query", payload, _timeout, ct).ConfigureAwait(false));
-            var value = reply.Field("Value");
-            if (reply.Field("ResponseStatus").Int64(-1) != 0 || value.Field("ErrorCode").Int64() != 0)
-            {
-                record.State = AlfaSubmissionState.Rejected;
-                OrderChanged?.Invoke(record);
-                throw new IOException("Order rejected: " + reply.Field("Message").Text()
-                    + " " + value.Field("ErrorText").Text());
+                if (item.Request is null || item.Request.LocalOrderId != item.LocalOrderId ||
+                    !_local.TryAdd(item.LocalOrderId, new AlfaOrderRecord(item.Request)))
+                    throw new InvalidDataException("Missing request or duplicate submit intent in journal");
+                _local[item.LocalOrderId].State = AlfaSubmissionState.OutcomeUnknown;
+                continue;
             }
-            record.ClientOrderNumber = value.Field("ClientOrderNum").Int64();
-            record.BrokerId = value.Field("NumEDocument").Int64();
-            if (record.ClientOrderNumber > 0) _client[record.ClientOrderNumber] = record;
-            if (record.BrokerId > 0) _broker[record.BrokerId] = record;
-            record.State = AlfaSubmissionState.ServiceAccepted;
-            // A broker publication may precede the response to #Order.Enter.Query.
-            if (record.BrokerId > 0 && _earlyBrokerOrders.TryRemove(record.BrokerId, out var early))
-                OnBrokerOrder(early);
-            else if (record.ClientOrderNumber > 0 && _earlyClientOrders.TryRemove(record.ClientOrderNumber, out early))
-                OnBrokerOrder(early);
-            foreach (var pending in _earlyExecutions.ToArray())
+
+            if (!_local.TryGetValue(item.LocalOrderId, out var order))
+                throw new InvalidDataException("Journal event without preceding submit intent");
+            switch (item.Kind)
             {
-                if (pending.Value.Field("NumEDocument").Int64() != record.BrokerId) continue;
-                if (_earlyExecutions.TryRemove(pending.Key, out var execution)) OnOwnExecution(execution);
+                case AlfaProJournalKind.SubmitAccepted:
+                    if (item.BrokerId <= 0 || item.ClientOrderNumber <= 0)
+                        throw new InvalidDataException("Acknowledgement has invalid broker identifiers");
+                    if ((order.BrokerId > 0 && order.BrokerId != item.BrokerId) ||
+                        (order.ClientOrderNumber > 0 && order.ClientOrderNumber != item.ClientOrderNumber))
+                        throw new InvalidDataException("Conflicting broker identifiers in journal");
+                    order.BrokerId = item.BrokerId;
+                    order.ClientOrderNumber = item.ClientOrderNumber;
+                    _broker[order.BrokerId] = order;
+                    _client[order.ClientOrderNumber] = order;
+                    if (order.State == AlfaSubmissionState.OutcomeUnknown)
+                        order.State = AlfaSubmissionState.ServiceAccepted;
+                    break;
+                case AlfaProJournalKind.SubmitRejected:
+                    order.State = AlfaSubmissionState.Rejected;
+                    order.CancelPending = false;
+                    break;
+                case AlfaProJournalKind.BrokerState:
+                    if (item.RemainingUnits < 0 ||
+                        item.RemainingUnits > order.Request.QuantityUnits ||
+                        item.Revision < order.LastVersion ||
+                        !Enum.IsDefined(item.State))
+                        throw new InvalidDataException("Invalid order state in journal");
+                    if (order.BrokerId != item.BrokerId || order.BrokerId <= 0)
+                        throw new InvalidDataException("Mismatched broker order in journal state");
+                    order.State = item.State;
+                    order.RemainingUnits = item.RemainingUnits;
+                    order.LastVersion = item.Revision;
+                    if (IsTerminal(item.State)) order.CancelPending = false;
+                    break;
+                case AlfaProJournalKind.OwnExecution:
+                    if (item.ExecutionId <= 0 || item.Account != order.Request.Account ||
+                        item.BrokerId != order.BrokerId || order.BrokerId <= 0)
+                        throw new InvalidDataException("Uncorrelated execution in journal");
+                    if (!_dedupTrades.TryAdd(item.Account + ":" + item.ExecutionId, 0))
+                        throw new InvalidDataException("Duplicate own execution in durable journal");
+                    break;
+                case AlfaProJournalKind.CancelIntent:
+                    if (order.BrokerId <= 0)
+                        throw new InvalidDataException("Cancellation before broker acknowledgement");
+                    order.CancelPending = true;
+                    break;
+                case AlfaProJournalKind.CancelAcknowledged:
+                    // The service acknowledgement does not prove a broker-side cancellation.
+                    order.CancelPending = true;
+                    break;
+                default:
+                    throw new InvalidDataException("Unsupported journal event kind");
             }
-            OrderChanged?.Invoke(record);
-            return record;
         }
+    }
+
+    private static bool IsTerminal(AlfaSubmissionState state) =>
+        state is AlfaSubmissionState.Filled or AlfaSubmissionState.Cancelled or
+            AlfaSubmissionState.Rejected;
+
+    private void Persist(AlfaProJournalEntry entry)
+    {
+        if (_journal is null)
+        {
+            if (RequireDurableJournal)
+                throw new IOException("No durable journal: live trading is blocked");
+            return;
+        }
+        try { _journal.Append(entry); }
         catch
         {
-            // State remains UNKNOWN unless broker explicitly rejected. Do not retry automatically.
+            TradingEnabled = false;
+            Reconciled = false;
             throw;
         }
+    }
+
+    private void CheckTradingReady()
+    {
+        if (!TradingEnabled || !BrokerAuthorized || !ReadyToSign || !Reconciled ||
+            (RequireDurableJournal && !HasDurableJournal))
+            throw new InvalidOperationException(
+                "Trading blocked: authorization, reconciliation or durable journal not ready");
+    }
+
+    public async Task<AlfaOrderRecord> SubmitAsync(AlfaOrderRequest request,
+        CancellationToken ct = default)
+    {
+        CheckTradingReady();
+        if (request.Side is not (1 or -1) || request.Account <= 0 || request.SubAccount <= 0 ||
+            request.Section <= 0 || request.ObjectId <= 0 || request.MarketBoardId <= 0 ||
+            request.AllowedOrderParamsId <= 0 || request.QuantityUnits <= 0 ||
+            (!request.IsMarket && request.LimitPrice <= 0))
+            throw new ArgumentException("Invalid order/account/price/volume identifiers");
+
+        var record = new AlfaOrderRecord(request);
+        lock (_submissionSync)
+        {
+            if (_local.ContainsKey(request.LocalOrderId))
+                throw new InvalidOperationException(
+                    "Local order ID already exists in durable history; never blindly resubmit");
+            // Critical ordering: persist and fsync BEFORE creating an in-memory order
+            // and, especially, before sending a broker request.
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.SubmitIntent,
+                request.LocalOrderId, Request: request));
+            if (!_local.TryAdd(request.LocalOrderId, record))
+                throw new InvalidOperationException("Concurrent local order ID collision");
+            record.State = AlfaSubmissionState.OutcomeUnknown;
+        }
+        OrderChanged?.Invoke(record);
+
+        var payload = new Dictionary<string, object?>
+        {
+            ["IdAccount"] = request.Account,
+            ["IdSubAccount"] = request.SubAccount,
+            ["IdRazdel"] = request.Section,
+            ["IdPriceControlType"] = 0,
+            ["IdObject"] = request.ObjectId,
+            ["BuySell"] = request.Side,
+            ["Quantity"] = request.QuantityUnits,
+            ["Comment"] = request.Comment,
+            ["IdAllowedOrderParams"] = request.AllowedOrderParamsId
+        };
+        if (!request.IsMarket) payload["LimitPrice"] = request.LimitPrice;
+        var reply = AlfaProJson.Unwrap(await _transport.RequestAsync(
+            "#Order.Enter.Query", payload, _timeout, ct).ConfigureAwait(false));
+        var value = reply.Field("Value");
+
+        if (reply.Field("ResponseStatus").Int64(-1) != 0 ||
+            value.Field("ErrorCode").Int64() != 0)
+        {
+            lock (record.Sync)
+            {
+                Persist(new AlfaProJournalEntry(AlfaProJournalKind.SubmitRejected,
+                    request.LocalOrderId, State: AlfaSubmissionState.Rejected));
+                record.State = AlfaSubmissionState.Rejected;
+            }
+            OrderChanged?.Invoke(record);
+            throw new IOException("Order rejected: " + reply.Field("Message").Text()
+                + " " + value.Field("ErrorText").Text());
+        }
+
+        long clientNum = value.Field("ClientOrderNum").Int64();
+        long brokerId = value.Field("NumEDocument").Int64();
+        // Missing IDs mean ambiguous outcome, not confirmed success or rejection.
+        if (clientNum <= 0 || brokerId <= 0)
+            throw new InvalidDataException("Broker acknowledgement lacks verified order identifiers");
+
+        lock (record.Sync)
+        {
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.SubmitAccepted,
+                request.LocalOrderId, BrokerId: brokerId, ClientOrderNumber: clientNum));
+            record.ClientOrderNumber = clientNum;
+            record.BrokerId = brokerId;
+            _client[clientNum] = record;
+            _broker[brokerId] = record;
+            record.State = AlfaSubmissionState.ServiceAccepted;
+        }
+        // Broker broadcasts may precede the response, including terminal fill states.
+        if (_earlyBrokerOrders.TryRemove(brokerId, out var early))
+            OnBrokerOrder(early);
+        else if (_earlyClientOrders.TryRemove(clientNum, out early))
+            OnBrokerOrder(early);
+        foreach (var pending in _earlyExecutions.ToArray())
+        {
+            if (pending.Value.Field("NumEDocument").Int64() != brokerId) continue;
+            if (_earlyExecutions.TryRemove(pending.Key, out var execution))
+                OnOwnExecution(execution);
+        }
+        OrderChanged?.Invoke(record);
+        return record;
     }
 
     public async Task CancelAsync(int localOrderId, CancellationToken ct = default)
     {
-        if (!_local.TryGetValue(localOrderId, out var record)) throw new KeyNotFoundException();
-        if (!TradingEnabled || !BrokerAuthorized || !ReadyToSign || !Reconciled)
-            throw new InvalidOperationException("Trading is not ready");
+        CheckTradingReady();
+        if (!_local.TryGetValue(localOrderId, out var record))
+            throw new KeyNotFoundException("Local order is not tracked");
         lock (record.Sync)
         {
-            if (record.BrokerId <= 0) throw new InvalidOperationException("Broker order ID is not known");
-            if (record.State is AlfaSubmissionState.Filled or AlfaSubmissionState.Cancelled
-                or AlfaSubmissionState.Rejected) return;
-            if (record.CancelPending) return;
+            if (record.BrokerId <= 0)
+                throw new InvalidOperationException("Broker order ID is unknown");
+            if (IsTerminal(record.State) || record.CancelPending) return;
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.CancelIntent, localOrderId,
+                BrokerId: record.BrokerId));
             record.CancelPending = true;
         }
-        try
+        var request = record.Request;
+        var response = AlfaProJson.Unwrap(await _transport.RequestAsync(
+            "#Order.Cancel.Query", new
+            {
+                IdAccount = request.Account,
+                IdSubAccount = request.SubAccount,
+                IdRazdel = request.Section,
+                NumEDocumentBase = record.BrokerId
+            }, _timeout, ct).ConfigureAwait(false));
+        if (response.Field("ResponseStatus").Int64(-1) != 0 ||
+            response.Field("Value").Field("ErrorCode").Int64() != 0)
+            throw new IOException("Cancel rejected; broker state must be reconciled");
+
+        lock (record.Sync)
         {
-            var req = record.Request;
-            var response = AlfaProJson.Unwrap(await _transport.RequestAsync(
-                "#Order.Cancel.Query", new
-                {
-                    IdAccount = req.Account, IdSubAccount = req.SubAccount,
-                    IdRazdel = req.Section, NumEDocumentBase = record.BrokerId
-                }, _timeout, ct).ConfigureAwait(false));
-            if (response.Field("ResponseStatus").Int64(-1) != 0
-                || response.Field("Value").Field("ErrorCode").Int64() != 0)
-                throw new IOException("Cancel rejected; reconcile broker order state: "
-                    + response.Field("Message").Text());
-            // Successful request is NOT confirmed cancellation. Await OrderEntity.
-        }
-        catch
-        {
-            // Keep CancelPending true until authoritative reconciliation.
-            throw;
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.CancelAcknowledged,
+                localOrderId, BrokerId: record.BrokerId));
+            // Never mark the order Cancelled here; only OrderEntity can confirm it.
         }
     }
 
     public AlfaOrderRecord? Find(long brokerId, long clientOrderNumber)
     {
         if (brokerId > 0 && _broker.TryGetValue(brokerId, out var found)) return found;
-        if (clientOrderNumber > 0 && _client.TryGetValue(clientOrderNumber, out found)) return found;
+        if (clientOrderNumber > 0 && _client.TryGetValue(clientOrderNumber, out found))
+            return found;
         return null;
     }
 
-    /// <summary>Only apply uniquely correlated broker records; never match by price/volume alone.</summary>
     public AlfaOrderRecord? OnBrokerOrder(JsonElement raw)
     {
         var item = AlfaProJson.Unwrap(raw);
         long brokerId = item.Field("NumEDocument").Int64();
         long clientId = item.Field("ClientOrderNum").Int64();
         var record = Find(brokerId, clientId);
-        // Broker IDs must not allow cross-account contamination.
         if (record is not null && !MatchesAccount(item, record)) return null;
         if (record is null)
         {
             if (brokerId > 0) _earlyBrokerOrders[brokerId] = item.Clone();
             else if (clientId > 0) _earlyClientOrders[clientId] = item.Clone();
-            return null; // manual order or publication before submission acknowledgement
+            return null; // External, manual, or as-yet-uncorrelated broker order.
         }
-        var status = item.Field("IdOrderStatus").Int64();
-        long rest = item.Field("Rest").Int64(-1);
-        long version = item.Field("Version").Int64();
+        long revision = item.Field("OrderStatusRevision").Int64(
+            item.Field("Version").Int64());
+        long remaining = item.Field("Rest").Int64(-1);
+        long status = item.Field("IdOrderStatus").Int64();
+
         lock (record.Sync)
         {
-            if (version > 0 && record.LastVersion > version) return record;
-            if (version > 0) record.LastVersion = version;
-            if (brokerId > 0) { record.BrokerId = brokerId; _broker[brokerId] = record; }
-            if (clientId > 0) { record.ClientOrderNumber = clientId; _client[clientId] = record; }
-            if (rest >= 0 && rest <= record.Request.QuantityUnits) record.RemainingUnits = rest;
-
-            // Never roll back an already-confirmed terminal state with an older event.
-            if (record.State is AlfaSubmissionState.Filled or AlfaSubmissionState.Cancelled
-                or AlfaSubmissionState.Rejected) return record;
-            record.State = status switch
+            if (record.BrokerId > 0 && brokerId > 0 && brokerId != record.BrokerId)
+                return null;
+            if (revision > 0 && record.LastVersion > revision) return record;
+            if (IsTerminal(record.State)) return record;
+            long nextRemaining = remaining >= 0 && remaining <= record.Request.QuantityUnits
+                ? remaining : record.RemainingUnits;
+            AlfaSubmissionState nextState = status switch
             {
                 20 => AlfaSubmissionState.Filled,
-                21 => AlfaSubmissionState.Cancelled,
+                21 or 26 => AlfaSubmissionState.Cancelled,
                 18 or 25 => AlfaSubmissionState.Rejected,
-                14 when record.RemainingUnits < record.Request.QuantityUnits
-                    => AlfaSubmissionState.PartiallyFilled,
+                14 when nextRemaining < record.Request.QuantityUnits =>
+                    AlfaSubmissionState.PartiallyFilled,
                 14 => AlfaSubmissionState.Active,
                 _ => record.State
             };
-            if (record.State is AlfaSubmissionState.Filled or AlfaSubmissionState.Cancelled
-                or AlfaSubmissionState.Rejected) record.CancelPending = false;
+            if (nextState == AlfaSubmissionState.Filled) nextRemaining = 0;
+            bool unchanged = nextState == record.State &&
+                nextRemaining == record.RemainingUnits &&
+                (revision <= 0 || record.LastVersion == revision);
+            if (unchanged) return record;
+
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.BrokerState,
+                record.Request.LocalOrderId, BrokerId: record.BrokerId,
+                State: nextState, RemainingUnits: nextRemaining,
+                Revision: Math.Max(revision, record.LastVersion)));
+            record.RemainingUnits = nextRemaining;
+            record.State = nextState;
+            if (revision > 0) record.LastVersion = revision;
+            if (IsTerminal(nextState)) record.CancelPending = false;
         }
         OrderChanged?.Invoke(record);
         return record;
@@ -233,39 +387,45 @@ public sealed class AlfaProOrders
     public bool OnOwnExecution(JsonElement raw)
     {
         var item = AlfaProJson.Unwrap(raw);
-        long id = item.Field("IdOperation").Int64();
+        long operationId = item.Field("IdOperation").Int64();
         long brokerId = item.Field("NumEDocument").Int64();
-        string key = item.Field("IdAccount").Text() + ":" + id;
-        if (id <= 0 || _dedupTrades.ContainsKey(key)) return false;
+        long account = item.Field("IdAccount").Int64();
+        string key = account + ":" + operationId;
+        if (operationId <= 0 || account <= 0) return false;
         if (brokerId <= 0 || !_broker.TryGetValue(brokerId, out var owner))
         {
             _earlyExecutions[key] = item.Clone();
             return false;
         }
         if (!MatchesAccount(item, owner)) return false;
-        if (!_dedupTrades.TryAdd(key, 0)) return false;
-        // OrderEntity.Rest remains authoritative: do not subtract the same fill twice.
+        lock (_executionSync)
+        {
+            if (_dedupTrades.ContainsKey(key)) return false;
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.OwnExecution,
+                owner.Request.LocalOrderId, BrokerId: brokerId,
+                ExecutionId: operationId, Account: account));
+            if (!_dedupTrades.TryAdd(key, 0))
+                throw new InvalidOperationException("Concurrent execution de-duplication failed");
+        }
         OwnExecution?.Invoke(item.Clone());
         return true;
     }
 
     private static bool MatchesAccount(JsonElement item, AlfaOrderRecord record)
     {
-        // Missing optional fields do not establish a mismatch.
         long account = item.Field("IdAccount").Int64();
         long section = item.Field("IdRazdel").Int64();
         long sub = item.Field("IdSubAccount").Int64();
-        return (account <= 0 || account == record.Request.Account)
-            && (section <= 0 || section == record.Request.Section)
-            && (sub <= 0 || sub == record.Request.SubAccount);
+        return (account <= 0 || account == record.Request.Account) &&
+            (section <= 0 || section == record.Request.Section) &&
+            (sub <= 0 || sub == record.Request.SubAccount);
     }
 
     public void MarkUnreconciled() => Reconciled = false;
     public void MarkReconciled() => Reconciled = true;
-    public void ClearAfterFullReconciliation() { /* Keep dedup keys for current session. */ }
+    public void ClearAfterFullReconciliation() { /* Preserve durable execution IDs. */ }
 }
 
-/// <summary>Exact conversion used only when OsEngine's volume is in lots.</summary>
 public static class AlfaProQuantities
 {
     public static long LotsToUnits(decimal lots, decimal lotSize)
