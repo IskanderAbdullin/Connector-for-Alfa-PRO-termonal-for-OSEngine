@@ -49,11 +49,14 @@ internal static class JournalStageTests
 
     private static AlfaProOrders Ready(AlfaProTransport transport, AlfaProOrderJournal? journal,
         TimeSpan? timeout = null)
-        => new(transport, timeout, journal)
+    {
+        var orders = new AlfaProOrders(transport, timeout, journal)
         {
-            TradingEnabled = true, BrokerAuthorized = true, ReadyToSign = true,
-            Reconciled = true // Explicit test-only readiness; never derived from a journal.
+            TradingEnabled = true, BrokerAuthorized = true, ReadyToSign = true
         };
+        orders.MarkReconciled(); // Explicit test-only readiness, never from journal.
+        return orders;
+    }
 
     private static void Check(bool condition, string reason)
     {
@@ -347,7 +350,7 @@ internal static class JournalStageTests
         string path = TempPath();
         try
         {
-            using var mock = await MockProTerminal.StartAsync();
+            await using var mock = await MockProTerminal.StartAsync();
             using (var journal = AlfaProOrderJournal.Open(path))
                 journal.Append(new AlfaProJournalEntry(
                     AlfaProJournalKind.SubmitAccepted, 1,
