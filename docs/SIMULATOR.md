@@ -55,6 +55,17 @@ It can inject delayed, fragmented, suppressed and reordered replies; broker publ
 | Cancellation | Partial fill followed by confirmed cancellation preserves executed amount |
 | Order parameters | Market order omits limit price and retains piece quantity |
 | Account safety | Mismatched account event cannot modify an order |
+| Recovery | Missing, empty and malformed client snapshots |
+| Recovery | Untracked broker order and execution |
+| Recovery | Unknown local submission and missing broker order identity |
+| Recovery | Trading-section and position consistency |
+| Recovery | Deleted broker order |
+| Recovery | Clean current-session audit never enables trading |
+| Recovery | Snapshot races with early live order broadcasts |
+| Recovery | Unknown broker status and order quantity mismatch |
+| Limits | Free-funds and portfolio-value limit queries |
+| Limits | Invalid or incomplete limit responses |
+| Subscriptions | Failed renewal triggers a fresh lease and initial snapshot |
 
 The runner prints `PASS`/`FAIL` for each scenario and returns nonzero on any failure. It writes `test-results/simulator-results.json` with the complete per-scenario result. GitHub Actions uploads that JSON as **alfapro-simulator-results**.
 
@@ -81,11 +92,19 @@ Test results may vary if the actual Alfa PRO API schema changes. Compare with a 
 - One own execution must not be counted twice.
 - Subscription limits are enforced before extra remote requests are sent.
 - Initial data snapshots alone must **not** mark all pre-existing orders as reconciled.
+- A current-session audit does not establish the outcomes of previous-session orders.
+- Untracked active orders and own executions block clean reconciliation.
+- A broadcast received before a snapshot reply must not be erased by that snapshot.
+- Subscription lease renewal failures trigger a new snapshot or fail closed.
 
 ## Remaining coverage gaps
 
-These tests do **not** exercise actual exchange fills, real terminal auth/signing, persistent order recovery between application restarts, genuine subscription expiration timing, broker-side rate quotas, margin/limit-service semantics, all instruments and bonds, history candles, multi-day sessions, or live latency.
+These tests do **not** exercise actual exchange fills, real terminal auth/signing, persistent order recovery between application restarts, genuine subscription expiration timing, broker-side rate quotas, real margin and limit-service semantics, all instruments and bonds, history candles, multi-day sessions, or live latency.
 
 The current OsEngine connector still has incomplete trading reconciliation and intentionally blocks live trading until that safety work is implemented and verified. Do not disable that safeguard just to pass a test.
 
 A future real-terminal test stage should run **read-only** first: connect with API enabled, collect anonymized instrument/account/reference responses, validate correct mappings and subscriptions, and only then assess guarded live orders with separate explicit authorization.
+
+## Stage 2 recovery extension
+
+See [recovery and broker limit architecture](RECOVERY.md) for the new current-session audit and its explicit limitations.
