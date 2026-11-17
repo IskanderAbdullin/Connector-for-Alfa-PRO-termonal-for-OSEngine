@@ -34,7 +34,7 @@ The journal is automatically opened when the OsEngine connector starts. The dire
 6. **CancelIntent**: the request to cancel is written before sending it.
 7. **CancelAcknowledged**: the service response is recorded without treating it as confirmed broker cancellation.
 
-Entries are newline-delimited JSON records containing monotonic sequence numbers, serialized event data and SHA-256 integrity checksums. A single process/thread-safe writer serializes all append operations. A per-entry `FileStream.Flush(true)` requests durable storage before the operation continues.
+Entries are newline-delimited JSON records containing monotonic sequence numbers, UTC event timestamps, serialized event data and SHA-256 integrity checksums. A single process/thread-safe writer serializes all append operations. A per-entry `FileStream.Flush(true)` requests durable storage before the operation continues.
 
 **Performance caveat:** synchronous fsync on order/state/execution events prioritizes crash consistency over the lowest possible latency. Actual local SSD, Windows and remote-server performance has not been benchmarked. Market-depth messages are not written to this journal.
 
