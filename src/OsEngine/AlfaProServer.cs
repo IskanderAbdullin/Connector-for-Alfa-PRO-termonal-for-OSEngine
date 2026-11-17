@@ -33,6 +33,10 @@ namespace OsEngine.Market.Servers.AlfaPro
         private readonly ConcurrentDictionary<long, Security> _securities = new ConcurrentDictionary<long, Security>();
         private readonly ConcurrentDictionary<string, Portfolio> _portfolios = new ConcurrentDictionary<string, Portfolio>();
         private readonly ConcurrentDictionary<long, string> _sections = new ConcurrentDictionary<long, string>();
+        private readonly ConcurrentDictionary<long, long> _sectionGroups = new ConcurrentDictionary<long, long>();
+        private readonly ConcurrentDictionary<long, string> _sectionRcodes = new ConcurrentDictionary<long, string>();
+        private readonly ConcurrentDictionary<long, (string Portfolio, string Security, string Class)> _positionIdentifiers =
+            new ConcurrentDictionary<long, (string Portfolio, string Security, string Class)>();
         private readonly ConcurrentDictionary<int, Order> _orders = new ConcurrentDictionary<int, Order>();
         private readonly ConcurrentDictionary<string, long> _objectByCode = new ConcurrentDictionary<string, long>();
         private readonly ConcurrentDictionary<string, long> _allowed = new ConcurrentDictionary<string, long>();
@@ -199,7 +203,10 @@ namespace OsEngine.Market.Servers.AlfaPro
                         string key = PortfolioKey(item.Field("IdAccount").Int64(),
                             item.Field("IdSubAccount").Int64(), item.Field("IdRazdel").Int64());
                         long section = item.Field("IdRazdel").Int64();
+                        if (section <= 0) break;
                         _sections[section] = key;
+                        _sectionGroups[section] = item.Field("IdRazdelGroup").Int64();
+                        _sectionRcodes[section] = item.Field("RCode").Text();
                         _portfolios.GetOrAdd(key, _ => new Portfolio { Number = key, ServerType = ServerType.AlfaPro });
                         PublishPortfolios();
                         break;
@@ -221,13 +228,27 @@ namespace OsEngine.Market.Servers.AlfaPro
         private void OnEntityDeleted(string type, JsonElement item)
         {
             if (type != "ClientPositionEntity") return;
-            // Do not guess which position was deleted without an object and portfolio identity.
-            if (item.Field("IdObject").Int64() > 0 && item.Field("IdRazdel").Int64() > 0)
+            long id = item.Field("IdPosition").Int64();
+            if (id <= 0 || !_positionIdentifiers.TryRemove(id, out var mapping) ||
+                !_portfolios.TryGetValue(mapping.Portfolio, out var portfolio))
             {
-                using var doc = JsonDocument.Parse(item.GetRawText());
-                // A later authoritative position refresh is required for deletion semantics.
-                Log("Position deleted: verify current broker position", LogMessageType.System);
+                _session?.Orders.MarkUnreconciled();
+                Log("Cannot correlate removed broker position; state must be re-audited",
+                    LogMessageType.Error);
+                return;
             }
+            lock (_positionLock)
+            {
+                portfolio.SetNewPosition(new PositionOnBoard
+                {
+                    PortfolioName = mapping.Portfolio,
+                    SecurityNameCode = mapping.Security,
+                    SecurityNameClass = mapping.Class,
+                    ValueCurrent = 0,
+                    ValueBlocked = 0
+                });
+            }
+            PublishPortfolios();
         }
 
         private static string PortfolioKey(long account, long sub, long section)
@@ -241,16 +262,22 @@ namespace OsEngine.Market.Servers.AlfaPro
 
         private void UpdateBalance(JsonElement item)
         {
-            var acc = item.Field("IdAccount").Int64();
-            var sub = item.Field("IdSubAccount").Int64();
-            // Balance belongs to a market group, not necessarily one specific Razdel.
-            foreach (var entry in _portfolios)
+            long account = item.Field("IdAccount").Int64();
+            long sub = item.Field("IdSubAccount").Int64();
+            long group = item.Field("IdRazdelGroup").Int64();
+            if (account <= 0 || sub <= 0 || group <= 0) return;
+            // BalanceEntity is scoped to (subaccount, market group), not every section.
+            foreach (var pair in _sections)
             {
-                if (!entry.Key.StartsWith(acc + "/" + sub + "/", StringComparison.Ordinal)) continue;
-                entry.Value.ValueBegin = item.Field("PrevBalance").Decimal();
-                entry.Value.ValueCurrent = item.Field("PortfolioCost").Decimal();
-                entry.Value.ValueLiquidCash = item.Field("LiquidBalance").Decimal();
-                entry.Value.UnrealizedPnl = item.Field("NPL").Decimal();
+                long section = pair.Key;
+                if (!_sectionGroups.TryGetValue(section, out var currentGroup) ||
+                    currentGroup != group ||
+                    pair.Value != PortfolioKey(account, sub, section) ||
+                    !_portfolios.TryGetValue(pair.Value, out var portfolio)) continue;
+                portfolio.ValueBegin = item.Field("PrevBalance").Decimal();
+                portfolio.ValueCurrent = item.Field("PortfolioCost").Decimal();
+                portfolio.ValueLiquidCash = item.Field("LiquidBalance").Decimal();
+                portfolio.UnrealizedPnl = item.Field("NPL").Decimal();
             }
             PublishPortfolios();
         }
@@ -259,12 +286,28 @@ namespace OsEngine.Market.Servers.AlfaPro
         {
             long objectId = item.Field("IdObject").Int64();
             long section = item.Field("IdRazdel").Int64();
-            if (!_sections.TryGetValue(section, out var key) || !_portfolios.TryGetValue(key, out var portfolio))
+            long account = item.Field("IdAccount").Int64();
+            long sub = item.Field("IdSubAccount").Int64();
+            long positionId = item.Field("IdPosition").Int64();
+            if (positionId <= 0 || objectId <= 0 || account <= 0 || sub <= 0 ||
+                !_sections.TryGetValue(section, out var key) ||
+                key != PortfolioKey(account, sub, section) ||
+                !_portfolios.TryGetValue(key, out var portfolio)) return;
+
+            _sectionRcodes.TryGetValue(section, out var rcode);
+            var candidates = _securities.Values.Where(sec =>
+                _objectByCode.TryGetValue(sec.NameId, out var id) &&
+                id == objectId && sec.Lot > 0 &&
+                (string.IsNullOrEmpty(rcode) || sec.Exchange == rcode)).ToList();
+            // A position cannot be associated with an arbitrary board when several match.
+            if (candidates.Count != 1)
+            {
+                _session?.Orders.MarkUnreconciled();
+                Log("Position maps to zero or multiple instruments: IdObject=" + objectId,
+                    LogMessageType.Error);
                 return;
-            var security = _securities.Values.FirstOrDefault(s =>
-                _objectByCode.TryGetValue(s.NameId, out var id) && id == objectId && s.Lot > 0);
-            if (security == null) return;
-            var lot = security.Lot;
+            }
+            var security = candidates[0];
             lock (_positionLock)
             {
                 portfolio.SetNewPosition(new PositionOnBoard
@@ -272,13 +315,13 @@ namespace OsEngine.Market.Servers.AlfaPro
                     PortfolioName = key,
                     SecurityNameCode = security.Name,
                     SecurityNameClass = security.NameClass,
-                    ValueCurrent = item.Field("TorgPos").Decimal() / lot,
-                    ValueBegin = item.Field("BackPos").Decimal() / lot,
-                    // PlanLong/PlanShort are not guaranteed to represent separately blocked lots.
+                    ValueCurrent = item.Field("TorgPos").Decimal() / security.Lot,
+                    ValueBegin = item.Field("BackPos").Decimal() / security.Lot,
                     ValueBlocked = 0,
                     UnrealizedPnl = item.Field("DailyPL").Decimal()
                 });
             }
+            _positionIdentifiers[positionId] = (key, security.Name, security.NameClass);
             PublishPortfolios();
         }
 
