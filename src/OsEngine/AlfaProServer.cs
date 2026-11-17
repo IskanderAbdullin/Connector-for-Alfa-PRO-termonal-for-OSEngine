@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Net;
 using System.Text.Json;
 using System.Threading;
@@ -22,6 +23,9 @@ namespace OsEngine.Market.Servers.AlfaPro
             NeedToHideParameters = false;
             CreateParameterString("PRO WebSocket URL", "ws://127.0.0.1:3366/router/");
             CreateParameterPassword("PRO Bearer Token", "");
+            CreateParameterString("Durable order journal path", Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OsEngine", "AlfaPro", "orders.v1.jsonl"));
             CreateParameterBoolean("Allow LIVE trading", false);
         }
     }
@@ -29,6 +33,7 @@ namespace OsEngine.Market.Servers.AlfaPro
     public sealed class AlfaProServerRealization : IServerRealization
     {
         private AlfaProSession _session;
+        private AlfaProOrderJournal _journal;
         private CancellationTokenSource _lifetime;
         private readonly ConcurrentDictionary<long, Security> _securities = new ConcurrentDictionary<long, Security>();
         private readonly ConcurrentDictionary<string, Portfolio> _portfolios = new ConcurrentDictionary<string, Portfolio>();
@@ -64,7 +69,7 @@ namespace OsEngine.Market.Servers.AlfaPro
 
         public void Connect(WebProxy proxy)
         {
-            if (_session != null) return;
+            if (_session != null || _lifetime != null) return;
             var endpoint = Parameter<ServerParameterString>("PRO WebSocket URL")?.Value
                 ?? "ws://127.0.0.1:3366/router/";
             var token = Parameter<ServerParameterPassword>("PRO Bearer Token")?.Value;
@@ -73,14 +78,31 @@ namespace OsEngine.Market.Servers.AlfaPro
                 Log("Bearer token is missing", LogMessageType.Error);
                 return;
             }
+            var journalPath = Parameter<ServerParameterString>("Durable order journal path")?.Value;
+            if (string.IsNullOrWhiteSpace(journalPath))
+            {
+                Log("Durable order journal path is required before connection", LogMessageType.Error);
+                return;
+            }
+            try { _journal = AlfaProOrderJournal.Open(journalPath); }
+            catch (Exception ex)
+            {
+                Log("Cannot open trusted durable order journal; refusing connector startup: "
+                    + ex.Message, LogMessageType.Error);
+                return;
+            }
             _lifetime = new CancellationTokenSource();
             var ct = _lifetime.Token;
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    var current = new AlfaProSession();
+                    var current = new AlfaProSession(_journal);
                     _session = current;
+                    if (current.Orders.RecoveredOrderCount > 0)
+                        Log("Replayed " + current.Orders.RecoveredOrderCount
+                            + " persisted order IDs. Previous outcomes still require broker reconciliation; "
+                            + "orders will not be resubmitted automatically.", LogMessageType.System);
                     current.Error += message => Log(message, LogMessageType.Error);
                     current.Disconnected += () =>
                     {
@@ -101,11 +123,26 @@ namespace OsEngine.Market.Servers.AlfaPro
                     ForceCheckOrdersAfterReconnectEvent?.Invoke();
                     PublishSecurities();
                     PublishPortfolios();
+                    var audit = current.AuditRecovery();
+                    if (!audit.Clean)
+                        Log("Read-only broker recovery audit found " + audit.Issues.Count
+                            + " issue(s). Trading remains blocked.", LogMessageType.System);
                 }
                 catch (Exception ex)
                 {
                     Log("Alfa PRO connection failed: " + ex.Message, LogMessageType.Error);
                     ServerStatus = ServerConnectStatus.Disconnect;
+                    var failed = _session;
+                    _session = null;
+                    if (failed != null)
+                    {
+                        try { await failed.DisposeAsync().ConfigureAwait(false); }
+                        catch (Exception) { }
+                    }
+                    _journal?.Dispose();
+                    _journal = null;
+                    _lifetime?.Dispose();
+                    _lifetime = null;
                 }
             }, ct);
         }
@@ -122,6 +159,8 @@ namespace OsEngine.Market.Servers.AlfaPro
             }
             _lifetime?.Dispose();
             _lifetime = null;
+            _journal?.Dispose();
+            _journal = null;
             if (ServerStatus != ServerConnectStatus.Disconnect)
             {
                 ServerStatus = ServerConnectStatus.Disconnect;
