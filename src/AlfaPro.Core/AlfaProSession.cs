@@ -82,6 +82,8 @@ public sealed class AlfaProSession : IAsyncDisposable
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(15);
     private Task? _renewLoop;
 
+    public AlfaProRecoveryAudit Recovery { get; } = new();
+    public AlfaProAuditReport AuditRecovery() => Recovery.Evaluate(Orders.AllOrders);
     public AlfaProOrders Orders { get; }
     public IReadOnlyCollection<AlfaInstrument> Instruments => _instruments.Values.ToArray();
     public bool IsConnected => _transport.IsConnected;
@@ -101,7 +103,8 @@ public sealed class AlfaProSession : IAsyncDisposable
         _subscriptions = new AlfaProSubscriptions(_transport, _timeout);
         _subscriptions.Snapshot += (type, data) =>
         {
-            foreach (var item in AlfaProJson.Items(data)) ProcessEntity(type, item, false);
+            Recovery.AcceptSnapshot(type, data);
+            foreach (var item in AlfaProJson.Items(data)) ProcessEntity(type, item, false, true);
         };
         Orders = new AlfaProOrders(_transport);
         _transport.Broadcast += ProcessBroadcast;
@@ -199,8 +202,9 @@ public sealed class AlfaProSession : IAsyncDisposable
         AuthorizationChanged?.Invoke();
     }
 
-    private void ProcessEntity(string type, JsonElement item, bool deleted)
+    private void ProcessEntity(string type, JsonElement item, bool deleted, bool fromSnapshot = false)
     {
+        if (!fromSnapshot) Recovery.AcceptUpdate(type, item, deleted);
         if (deleted)
         {
             EntityDeleted?.Invoke(type, item.Clone());
@@ -259,7 +263,7 @@ public sealed class AlfaProSession : IAsyncDisposable
                 catch (Exception ex)
                 {
                     Error?.Invoke("Subscription renewal failed: " + ex.Message);
-                    // A lost critical subscription makes state reconciliation unreliable.
+                    // Missing an order/portfolio subscription invalidates any prior audit.
                     Orders.MarkUnreconciled();
                 }
             }
