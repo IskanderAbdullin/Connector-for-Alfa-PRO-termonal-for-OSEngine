@@ -46,6 +46,12 @@ public sealed class AlfaOrderRecord
     }
 }
 
+/// <summary>Unresolved local order and its latest unverified operator observation.</summary>
+public sealed record AlfaProRecoveryCase(
+    int LocalOrderId, long BrokerId, long ClientOrderNumber,
+    AlfaSubmissionState State, bool CancelPending, string Reason,
+    AlfaProOperatorObservation? LatestObservation);
+
 /// <summary>
 /// Fail-closed order coordinator. Submit intents are journaled and flushed before transport send.
 /// Requests with unknown results are never retried automatically, including after process restart.
@@ -61,6 +67,7 @@ public sealed class AlfaProOrders
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _broker = new();
     private readonly ConcurrentDictionary<long, AlfaOrderRecord> _client = new();
     private readonly ConcurrentDictionary<string, byte> _dedupTrades = new();
+    private readonly ConcurrentDictionary<int, AlfaProOperatorObservation> _operatorObservations = new();
     private readonly ConcurrentDictionary<long, JsonElement> _earlyBrokerOrders = new();
     private readonly ConcurrentDictionary<long, JsonElement> _earlyClientOrders = new();
     private readonly ConcurrentDictionary<string, JsonElement> _earlyExecutions = new();
@@ -168,6 +175,13 @@ public sealed class AlfaProOrders
                     // A late service acknowledgement MUST NOT resurrect CancelPending
                     // after a terminal Fill/Cancel/Reject was already journaled.
                     if (!IsTerminal(order.State)) order.CancelPending = true;
+                    break;
+                case AlfaProJournalKind.OperatorObservation:
+                    if (item.Observation is null)
+                        throw new InvalidDataException("Operator observation lacks evidence");
+                    ValidateObservation(item.Observation);
+                    _operatorObservations[item.LocalOrderId] = item.Observation;
+                    // Human observations never mutate authoritative broker state.
                     break;
                 default:
                     throw new InvalidDataException("Unsupported journal event kind");
@@ -439,6 +453,55 @@ public sealed class AlfaProOrders
         return (account <= 0 || account == record.Request.Account) &&
             (section <= 0 || section == record.Request.Section) &&
             (sub <= 0 || sub == record.Request.SubAccount);
+    }
+
+    public IReadOnlyList<AlfaProRecoveryCase> GetRecoveryCases()
+        => _local.Values.Where(record => !IsTerminal(record.State) || record.CancelPending)
+            .OrderBy(record => record.Request.LocalOrderId)
+            .Select(record => new AlfaProRecoveryCase(
+                record.Request.LocalOrderId,
+                record.BrokerId,
+                record.ClientOrderNumber,
+                record.State,
+                record.CancelPending,
+                record.State == AlfaSubmissionState.OutcomeUnknown
+                    ? "SUBMISSION_OUTCOME_UNKNOWN"
+                    : record.CancelPending ? "CANCEL_OUTCOME_UNKNOWN"
+                    : "BROKER_ORDER_NOT_PROVEN_TERMINAL",
+                _operatorObservations.TryGetValue(record.Request.LocalOrderId, out var observation)
+                    ? observation : null))
+            .ToArray();
+
+    private static void ValidateObservation(AlfaProOperatorObservation evidence)
+    {
+        if (!Enum.IsDefined(evidence.Source) || !Enum.IsDefined(evidence.Outcome)
+            || string.IsNullOrWhiteSpace(evidence.Reference) ||
+            evidence.Reference.Length > 200 || evidence.Reference.Any(char.IsControl) ||
+            evidence.Note.Length > 500 || evidence.Note.Any(char.IsControl))
+            throw new ArgumentException(
+                "Evidence must have a known source, outcome, short external reference and no control characters");
+    }
+
+    /// <summary>
+    /// Persist a user-reported external observation without changing any order state.
+    /// This method never sends a request to the terminal or marks orders reconciled.
+    /// </summary>
+    public void RecordOperatorObservation(int localOrderId, AlfaProOperatorObservation observation)
+    {
+        if (observation is null) throw new ArgumentNullException(nameof(observation));
+        ValidateObservation(observation);
+        if (!_local.TryGetValue(localOrderId, out var record))
+            throw new KeyNotFoundException("Unknown local order");
+        lock (record.Sync)
+        {
+            // A review record cannot be added without a healthy journal. Persist first.
+            if (_journal is null || !_journal.Healthy)
+                throw new IOException("An accessible durable journal is required");
+            Persist(new AlfaProJournalEntry(AlfaProJournalKind.OperatorObservation,
+                localOrderId, Observation: observation));
+            _operatorObservations[localOrderId] = observation;
+            MarkUnreconciled();
+        }
     }
 
     public void MarkUnreconciled() => Reconciled = false;
