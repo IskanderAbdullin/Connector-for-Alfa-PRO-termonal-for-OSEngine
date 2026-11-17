@@ -97,6 +97,20 @@ Corrupted/truncated files or duplicate broker identity mappings fail closed. Fil
 
 See [Journal setup, crash-consistency design, replay tests and remaining risks](docs/JOURNAL.md).
 
+## Read-only terminal probe and operator recovery review (stage 4)
+
+The standalone `AlfaPro.Diagnostic` CLI can check the PRO API from the **same Windows computer** without submitting, cancelling or replacing orders. It accepts only a local `ws://` endpoint and produces a report with counts, status flags and issue codes—**no tokens, broker account IDs or raw order messages**.
+
+```powershell
+dotnet run --project tools/AlfaPro.Diagnostic/AlfaPro.Diagnostic.csproj -c Release -- probe --seconds 15
+```
+
+The terminal token is requested in a hidden prompt. A real terminal must be running with its local API enabled. The terminal was **not accessible during CI**, so this is a user-executable read-only acceptance step, not a completed production test.
+
+The same CLI can inspect unresolved durable journal orders **offline**, and append externally referenced operator observations. Those entries never change a broker state or enable trading.
+
+See [Windows read-only validation, sanitized report and unresolved-order review](docs/READ_ONLY_VALIDATION.md).
+
 The GitHub Actions workflow also builds an OsEngine Windows integration. **Simulator tests do not verify behavior against the actual Alfa PRO Terminal.**
 
 ## Architecture
