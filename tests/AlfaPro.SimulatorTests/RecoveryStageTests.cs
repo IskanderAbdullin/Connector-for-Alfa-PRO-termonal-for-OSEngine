@@ -264,8 +264,9 @@ internal static class RecoveryStageTests
         var orders = new AlfaProOrders(transport)
         {
             TradingEnabled = true, BrokerAuthorized = true, ReadyToSign = true,
-            Reconciled = true, RequireDurableJournal = false // controlled simulator only, never live
+            RequireDurableJournal = false // controlled simulator only, never live
         };
+        orders.MarkReconciled(); // Test-only mock readiness.
         var tracked = await orders.SubmitAsync(Order());
         var audit = NewCompleteAudit();
         audit.AcceptUpdate("OrderEntity", J(new
