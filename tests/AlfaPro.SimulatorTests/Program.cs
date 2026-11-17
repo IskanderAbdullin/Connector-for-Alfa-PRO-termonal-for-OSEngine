@@ -29,7 +29,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("confirmed cancellation after partial fill preserves executed quantity", CancelAfterPartial),
     ("market orders omit the limit price and retain quantity in pieces", MarketOrderParameters),
     ("events from another account cannot mutate an order", CrossAccountIsolation)
-}.Concat(RecoveryStageTests.Tests).Concat(JournalStageTests.Tests).ToArray();
+}.Concat(RecoveryStageTests.Tests).Concat(JournalStageTests.Tests)
+    .Concat(DiagnosticStageTests.Tests).ToArray();
 
 int passed = 0, failed = 0;
 var outcomes = new List<ScenarioResult>();
