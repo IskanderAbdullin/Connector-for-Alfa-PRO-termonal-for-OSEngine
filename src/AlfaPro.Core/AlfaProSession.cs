@@ -102,6 +102,8 @@ public sealed class AlfaProSession : IAsyncDisposable
     public AlfaProSession()
     {
         _subscriptions = new AlfaProSubscriptions(_transport, _timeout);
+        Orders = new AlfaProOrders(_transport);
+        Limits = new AlfaProLimitClient(_transport);
         _subscriptions.Snapshot += (type, data) =>
         {
             Recovery.AcceptSnapshot(type, data);
@@ -114,8 +116,6 @@ public sealed class AlfaProSession : IAsyncDisposable
             Recovery.Invalidate(type);
             Error?.Invoke("Subscription recreated; broker state requires audit: " + type);
         };
-        Orders = new AlfaProOrders(_transport);
-        Limits = new AlfaProLimitClient(_transport);
         _transport.Broadcast += ProcessBroadcast;
         _transport.Faulted += ex => Error?.Invoke(ex.Message);
         _transport.Disconnected += () =>
