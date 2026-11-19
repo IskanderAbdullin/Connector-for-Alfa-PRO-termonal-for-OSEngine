@@ -1,0 +1,373 @@
+{
+  "schema_version": "2.0.0",
+  "document_type": "project_snapshot",
+  "project": {
+    "id": "connector-for-alfa-pro-termonal-for-osengine",
+    "name": "Connector-for-Alfa-PRO-termonal-for-OSEngine",
+    "repository": "IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine",
+    "category": "trading_connector",
+    "default_branch": "main",
+    "tracked_branch": "main",
+    "source_commit": "c51ea7e64c445e7eaff91efca239515e09dd16d2",
+    "description": "Коннектор OsEngine для Alfa-Investments PRO WebSocket API: транспорт, подписки, журнал заявок, восстановление состояния, симулятор и read-only диагностика.",
+    "languages": [
+      "C#",
+      "Python"
+    ],
+    "tags": [
+      "GitHub",
+      "OsEngine Lab v2"
+    ]
+  },
+  "capture": {
+    "at": "2026-11-19T21:41:46.681Z",
+    "method": "repository_inspection",
+    "limitations": [
+      "Первичная инвентаризация из README, дерева и документации GitHub; без независимого запуска в этой сессии.",
+      "Документальное описание работы системы не считается подтверждением текущего развертывания."
+    ],
+    "references": [
+      {
+        "kind": "documentation",
+        "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+      },
+      {
+        "kind": "documentation",
+        "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/JOURNAL.md"
+      },
+      {
+        "kind": "documentation",
+        "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/READ_ONLY_VALIDATION.md"
+      },
+      {
+        "kind": "documentation",
+        "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/SIMULATOR.md"
+      }
+    ]
+  },
+  "health": {
+    "stage": "development",
+    "verification": "documented_only",
+    "deployment": "not_verified",
+    "summary": "Источники описывают реализованные компоненты, их проверки и границы; отдельная независимая проверка не проводилась."
+  },
+  "goals": [
+    "Реализовать безопасный нативный API-коннектор OsEngine",
+    "Подтвердить восстановление заявок и совместимость с настоящим терминалом Alfa PRO"
+  ],
+  "components": [
+    {
+      "id": "transport",
+      "name": "WebSocket транспорт",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "WebSocket транспорт",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProTransport.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProTransport.cs"
+        }
+      ]
+    },
+    {
+      "id": "session",
+      "name": "Авторизация и сессия",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "Авторизация и сессия",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProSession.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProSession.cs"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "name": "Долговременный журнал заявок",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "Долговременный журнал заявок",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProOrderJournal.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProOrderJournal.cs"
+        }
+      ]
+    },
+    {
+      "id": "osengine",
+      "name": "Адаптер сервера OsEngine",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "Адаптер сервера OsEngine",
+      "paths": [
+        "src/OsEngine/AlfaProServer.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/OsEngine/AlfaProServer.cs"
+        }
+      ]
+    },
+    {
+      "id": "simulator",
+      "name": "Локальные тесты WebSocket",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "Локальные тесты WebSocket",
+      "paths": [
+        "tests/AlfaPro.SimulatorTests/Program.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/tests/AlfaPro.SimulatorTests/Program.cs"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "name": "Read-only диагностический CLI",
+      "kind": "software",
+      "status": "observed_in_source",
+      "description": "Read-only диагностический CLI",
+      "paths": [
+        "tools/AlfaPro.Diagnostic/Program.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/tools/AlfaPro.Diagnostic/Program.cs"
+        }
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "transport",
+      "name": "WebSocket транспорт",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProTransport.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProTransport.cs"
+        }
+      ]
+    },
+    {
+      "id": "session",
+      "name": "Авторизация и сессия",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProSession.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProSession.cs"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "name": "Долговременный журнал заявок",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "src/AlfaPro.Core/AlfaProOrderJournal.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProOrderJournal.cs"
+        }
+      ]
+    },
+    {
+      "id": "osengine",
+      "name": "Адаптер сервера OsEngine",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "src/OsEngine/AlfaProServer.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/OsEngine/AlfaProServer.cs"
+        }
+      ]
+    },
+    {
+      "id": "simulator",
+      "name": "Локальные тесты WebSocket",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "tests/AlfaPro.SimulatorTests/Program.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/tests/AlfaPro.SimulatorTests/Program.cs"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "name": "Read-only диагностический CLI",
+      "kind": "capability",
+      "status": "observed_in_source",
+      "paths": [
+        "tools/AlfaPro.Diagnostic/Program.cs"
+      ],
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/tools/AlfaPro.Diagnostic/Program.cs"
+        }
+      ]
+    }
+  ],
+  "requirements": [],
+  "checks": [
+    {
+      "id": "documented-validation",
+      "name": "Проверки из README и проектных отчётов",
+      "kind": "integration",
+      "status": "unknown",
+      "basis": "documentation",
+      "description": "Подробности и исторические результаты доступны в проекте; во время инвентаризации проверки не выполнялись.",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "id": "risk-1",
+      "title": "README прямо запрещает включение live-торговли до интеграционной проверки реального терминала.",
+      "severity": "medium",
+      "state": "open",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    },
+    {
+      "id": "risk-2",
+      "title": "Непроверенные задержки, лимиты и восстановление после сетевых сбоев.",
+      "severity": "medium",
+      "state": "open",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "collect-evidence",
+      "title": "Подключить формат v2 и начать запись реальных проверок, зависимостей и решений",
+      "priority": "high",
+      "state": "todo",
+      "detail": "Привязывать результаты к SHA исходников, хранить доступные доказательства."
+    }
+  ],
+  "milestones": [],
+  "decisions": [],
+  "dependencies": [],
+  "artifacts": [
+    {
+      "id": "doc-1",
+      "name": "README.md",
+      "kind": "documentation",
+      "path": "README.md",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    },
+    {
+      "id": "doc-2",
+      "name": "docs/JOURNAL.md",
+      "kind": "documentation",
+      "path": "docs/JOURNAL.md",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/JOURNAL.md"
+        }
+      ]
+    },
+    {
+      "id": "doc-3",
+      "name": "docs/READ_ONLY_VALIDATION.md",
+      "kind": "documentation",
+      "path": "docs/READ_ONLY_VALIDATION.md",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/READ_ONLY_VALIDATION.md"
+        }
+      ]
+    },
+    {
+      "id": "doc-4",
+      "name": "docs/SIMULATOR.md",
+      "kind": "documentation",
+      "path": "docs/SIMULATOR.md",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/SIMULATOR.md"
+        }
+      ]
+    }
+  ],
+  "timeline": [
+    {
+      "title": "Инвентаризация GitHub",
+      "date": "2026-11-19",
+      "kind": "review",
+      "commit": "c51ea7e64c445e7eaff91efca239515e09dd16d2",
+      "evidence": [
+        {
+          "kind": "commit",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/commit/c51ea7e64c445e7eaff91efca239515e09dd16d2"
+        }
+      ]
+    }
+  ],
+  "open_questions": [
+    "Какие проверки нужно независимо повторить для текущего релиза/ветки?"
+  ],
+  "notes": [
+    "Снимок не означает запуск программы, доступ к приватным аккаунтам или отправку биржевых заявок."
+  ]
+}
