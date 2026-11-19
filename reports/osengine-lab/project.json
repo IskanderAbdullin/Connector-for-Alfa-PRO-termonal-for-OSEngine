@@ -369,5 +369,132 @@
   ],
   "notes": [
     "Снимок не означает запуск программы, доступ к приватным аккаунтам или отправку биржевых заявок."
+  ],
+  "workstreams": [
+    {
+      "id": "transport",
+      "title": "PRO WebSocket транспорт",
+      "state": "in_progress",
+      "component_ids": [
+        "transport",
+        "session"
+      ],
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "title": "Журнал и восстановление заявок",
+      "state": "in_progress",
+      "component_ids": [
+        "journal"
+      ],
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/JOURNAL.md"
+        }
+      ]
+    },
+    {
+      "id": "terminal",
+      "title": "Приёмка реального Alfa PRO Terminal",
+      "state": "planned",
+      "component_ids": [
+        "diagnostics",
+        "osengine"
+      ],
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/READ_ONLY_VALIDATION.md"
+        }
+      ]
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "pro-ws",
+      "name": "Alfa PRO WebSocket API 2.2",
+      "kind": "websocket",
+      "status": "implemented",
+      "contract_path": "src/AlfaPro.Core/AlfaProTransport.cs",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/AlfaPro.Core/AlfaProTransport.cs"
+        }
+      ]
+    },
+    {
+      "id": "osengine-server",
+      "name": "OsEngine server adapter",
+      "kind": "api",
+      "status": "implemented",
+      "contract_path": "src/OsEngine/AlfaProServer.cs",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/src/OsEngine/AlfaProServer.cs"
+        }
+      ]
+    },
+    {
+      "id": "readonly-cli",
+      "name": "Read-only terminal diagnostics",
+      "kind": "cli",
+      "status": "implemented",
+      "contract_path": "tools/AlfaPro.Diagnostic/Program.cs",
+      "evidence": [
+        {
+          "kind": "source",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/tools/AlfaPro.Diagnostic/Program.cs"
+        }
+      ]
+    }
+  ],
+  "deployments": [
+    {
+      "id": "live",
+      "environment": "Рабочий Alfa PRO Terminal",
+      "status": "not_deployed",
+      "notes": "README: live-терминал не проверен, торговый режим по умолчанию отключён.",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    }
+  ],
+  "safety_controls": [
+    {
+      "id": "live-disabled",
+      "title": "Live trading выключен по умолчанию",
+      "state": "documented",
+      "category": "risk",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/README.md"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "title": "Журнал восстановления и сверка ордеров",
+      "state": "implemented",
+      "category": "recovery",
+      "evidence": [
+        {
+          "kind": "documentation",
+          "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/blob/c51ea7e64c445e7eaff91efca239515e09dd16d2/docs/JOURNAL.md"
+        }
+      ]
+    }
   ]
 }
