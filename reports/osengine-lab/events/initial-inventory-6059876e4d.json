@@ -1,0 +1,51 @@
+{
+  "schema_version": "2.0.0",
+  "document_type": "development_event",
+  "project": {
+    "repository": "IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine",
+    "branch": "main"
+  },
+  "event": {
+    "id": "6059876e-4d88-4f56-a29a-702fe912537e",
+    "occurred_at": "2026-11-19T21:55:30.887Z",
+    "type": "review",
+    "title": "Первичная инвентаризация проекта и подключение правил Lab v2",
+    "summary": "На основе кода, структуры GitHub и документации создан проектный JSON v2; в AGENTS.md добавлена инструкция вести дальнейшие события по единой схеме. Исходный торговый код не менялся.",
+    "basis": "observed_by_agent",
+    "actor": "ChatGPT (GitHub connector)",
+    "source_commit": "6059876e4d88ff56229a702fe912537e80ed2882"
+  },
+  "changes": [
+    {
+      "path": "reports/osengine-lab/project.json",
+      "action": "added",
+      "summary": "Создан доказательный снимок проекта v2.",
+      "implementation_notes": "Использованы источники из GitHub; отдельно отмечена непроверенность исторических тестов."
+    },
+    {
+      "path": "AGENTS.md",
+      "action": "added",
+      "summary": "Подключены инструкции для будущих отчётов агента v2."
+    }
+  ],
+  "checks": [],
+  "issues": [],
+  "next_actions": [
+    {
+      "id": "enable-agent-module",
+      "title": "Установить универсальный модуль Lab v2 в рабочую среду Codex и проверить создание следующего события",
+      "state": "todo",
+      "priority": "high"
+    }
+  ],
+  "evidence": [
+    {
+      "kind": "commit",
+      "ref": "https://github.com/IskanderAbdullin/Connector-for-Alfa-PRO-termonal-for-OSEngine/commit/6059876e4d88ff56229a702fe912537e80ed2882",
+      "source_commit": "6059876e4d88ff56229a702fe912537e80ed2882"
+    }
+  ],
+  "limitations": [
+    "Во время первичной инвентаризации не запускались торговые боты, интеграционные и офлайн-тесты."
+  ]
+}
